@@ -193,7 +193,7 @@ export function HomeScreen() {
                 <div
                   className="h-full rounded-full"
                   style={{
-                    width: `${(a.minutes / APP_USAGE[0].minutes) * 100}%`,
+                    width: `${(a.minutes / (APP_USAGE[0]?.minutes ?? 1)) * 100}%`,
                     background: "var(--gradient-flow)",
                   }}
                 />
