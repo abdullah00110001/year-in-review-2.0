@@ -99,7 +99,7 @@ export function TopBar({
 }: {
   title: string;
   subtitle: string;
-  onBack?: () => void;
+  onBack?: (() => void) | undefined;
 }) {
   return (
     <header className="relative overflow-hidden night-gradient px-5 pb-10 pt-6">
