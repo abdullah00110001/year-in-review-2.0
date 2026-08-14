@@ -476,6 +476,9 @@ public class ShieldPlugin extends Plugin {
             List<android.content.pm.ResolveInfo> resolved =
                 pm.queryIntentActivities(launcherIntent, 0);
 
+            // Icons are heavy — allow the JS side to opt out (default: include).
+            boolean withIcons = call.getBoolean("icons", Boolean.TRUE);
+
             JSArray apps = new JSArray();
             String myPkg = getContext().getPackageName();
             for (android.content.pm.ResolveInfo ri : resolved) {
@@ -492,6 +495,10 @@ public class ShieldPlugin extends Plugin {
                     app.put("appName", pkg);
                     app.put("isSystem", false);
                 }
+                if (withIcons) {
+                    String icon = encodeAppIcon(pm, ri);
+                    if (icon != null) app.put("icon", icon);
+                }
                 apps.put(app);
             }
 
@@ -502,6 +509,31 @@ public class ShieldPlugin extends Plugin {
             call.reject("Failed to list installed apps", e);
         }
     }
+
+    /** Render a launcher icon into a small base64 PNG data-URL for the web UI. */
+    private String encodeAppIcon(PackageManager pm, android.content.pm.ResolveInfo ri) {
+        try {
+            android.graphics.drawable.Drawable d = ri.loadIcon(pm);
+            if (d == null) return null;
+
+            int size = 96; // px — enough for a 40dp list icon on xxhdpi
+            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
+                size, size, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas canvas = new android.graphics.Canvas(bmp);
+            d.setBounds(0, 0, size, size);
+            d.draw(canvas);
+
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out);
+            bmp.recycle();
+            return "data:image/png;base64,"
+                + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+
 
     @PluginMethod
     public void getBlockStats(PluginCall call) {
