@@ -4,6 +4,8 @@ export interface InstalledApp {
   packageName: string;
   appName: string;
   isSystem: boolean;
+  /** base64 PNG data-URL of the real launcher icon (Android only). */
+  icon?: string;
 }
 
 export interface ShieldPluginInterface {
@@ -22,7 +24,7 @@ export interface ShieldPluginInterface {
   getBlockedSites(): Promise<{ sites: string[] }>;
   blockKeywords(options: { keywords: string[] }): Promise<void>;
   getBlockedKeywords(): Promise<{ keywords: string[] }>;
-  getInstalledApps(): Promise<{ apps: InstalledApp[] }>;
+  getInstalledApps(options?: { icons?: boolean }): Promise<{ apps: InstalledApp[] }>;
   getBlockStats(): Promise<{ blockedAttemptsToday: number }>;
 
   // ৩. মোড ম্যানেজমেন্ট
