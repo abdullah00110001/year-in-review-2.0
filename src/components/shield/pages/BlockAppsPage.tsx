@@ -143,10 +143,11 @@ export function BlockAppsPage({ onBack }: BlockAppsPageProps) {
                   <CardContent className="p-3 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="relative shrink-0">
-                        <AppIcon
-                          packageName={app.packageName}
+                        <AppIconImage
+                          icon={app.icon}
                           appName={app.appName}
                         />
+
                         {isBlocked && (
                           <div className="absolute -top-1 -right-1 bg-rose-500 rounded-full p-0.5">
                             <CheckCircle2 className="h-3 w-3 text-white" />
