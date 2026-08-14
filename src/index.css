@@ -761,3 +761,71 @@ input, textarea, [contenteditable="true"] {
 @media (prefers-reduced-motion: reduce) {
   .shield-scanline, .shield-ripple { animation: none; display: none; }
 }
+
+/* ==========================================================================
+   SHIELD HOME — motion layer only. No new colours, fonts or tokens: every
+   effect below is built from the existing --primary / --border variables.
+   ========================================================================== */
+@keyframes shield-rise-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+.shield-os > * {
+  animation: shield-rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.shield-os > *:nth-child(1) { animation-delay: 0.02s; }
+.shield-os > *:nth-child(2) { animation-delay: 0.08s; }
+.shield-os > *:nth-child(3) { animation-delay: 0.14s; }
+.shield-os > *:nth-child(4) { animation-delay: 0.20s; }
+.shield-os > *:nth-child(5) { animation-delay: 0.26s; }
+.shield-os > *:nth-child(6) { animation-delay: 0.32s; }
+
+/* Slow living aura behind the core rings */
+@keyframes shield-aura {
+  0%, 100% { opacity: 0.22; transform: scale(1); }
+  50%      { opacity: 0.42; transform: scale(1.05); }
+}
+.shield-aura {
+  pointer-events: none;
+  position: absolute;
+  inset: 8%;
+  border-radius: 9999px;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.28), transparent 68%);
+  filter: blur(18px);
+  animation: shield-aura 6s ease-in-out infinite;
+}
+
+/* Perimeter sweep along the top edge of a panel */
+@keyframes shield-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.shield-sweep::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(to right, transparent, hsl(var(--primary) / 0.85), transparent);
+  animation: shield-sweep 3.6s linear infinite;
+}
+
+/* Usage rails fill in from zero on mount */
+@keyframes shield-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+.shield-fill {
+  transform-origin: left center;
+  animation: shield-fill 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Soft press feedback for tappable rows */
+.shield-tap { transition: transform 0.16s ease, background-color 0.16s ease; }
+.shield-tap:active { transform: scale(0.985); }
+
+@media (prefers-reduced-motion: reduce) {
+  .shield-os > *,
+  .shield-aura,
+  .shield-sweep::after,
+  .shield-fill { animation: none; }
+}
