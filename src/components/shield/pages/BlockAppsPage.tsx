@@ -6,35 +6,13 @@ import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import ShieldPlugin, { type InstalledApp } from '@/lib/capacitor/shieldPlugin';
+import { AppIconImage } from '@/components/shield/AppIconImage';
 
 interface BlockAppsPageProps {
   onBack: () => void;
 }
 
 const STORAGE_KEY = 'shield_blocked_apps_v2';
-
-function AppIcon({ packageName, appName }: { packageName: string; appName: string }) {
-  const [error, setError] = useState(false);
-
-  if (error) {
-    return (
-      <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-        <span className="text-sm font-bold text-primary">
-          {appName.charAt(0).toUpperCase()}
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={`https://play-lh.googleusercontent.com/icon?id=${packageName}`}
-      alt={appName}
-      className="h-10 w-10 rounded-xl object-cover shrink-0"
-      onError={() => setError(true)}
-    />
-  );
-}
 
 export function BlockAppsPage({ onBack }: BlockAppsPageProps) {
   const [apps, setApps] = useState<InstalledApp[]>([]);
