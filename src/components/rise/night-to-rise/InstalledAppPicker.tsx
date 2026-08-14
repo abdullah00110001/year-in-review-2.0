@@ -103,7 +103,7 @@ export function InstalledAppPicker({
     const known = new Set(apps.map((a) => a.id));
     const extras = selected
       .filter((id) => !known.has(id))
-      .map((id) => ({ id, name: id }));
+      .map((id) => ({ id, name: id, icon: undefined as string | undefined }));
     return [...extras, ...apps];
   }, [apps, selected]);
 
