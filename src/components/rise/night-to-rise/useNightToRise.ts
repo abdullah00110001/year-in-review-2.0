@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DEFAULT_CONFIG, NightToRiseConfig, STORAGE_KEY, getIsoWeekKey, MAX_PAUSES_PER_WEEK } from './types';
 import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
+import { computeNightWindows, nextOccurrenceMs } from './timeMath';
 
 
 function load(): NightToRiseConfig {
@@ -11,24 +12,6 @@ function load(): NightToRiseConfig {
   } catch {
     return DEFAULT_CONFIG;
   }
-}
-
-function parseHM(s: string): { h: number; m: number } {
-  const [h, m] = s.split(':').map(Number);
-  return { h: h || 0, m: m || 0 };
-}
-
-function minutesNow(d = new Date()) {
-  return d.getHours() * 60 + d.getMinutes();
-}
-
-/** Next epoch-ms occurrence of a "HH:MM" time (today if still ahead, else tomorrow). */
-function nextOccurrenceMs(timeStr: string): number {
-  const { h, m } = parseHM(timeStr);
-  const next = new Date();
-  next.setHours(h, m, 0, 0);
-  if (next <= new Date()) next.setDate(next.getDate() + 1);
-  return next.getTime();
 }
 
 export function useNightToRise(riseAlarmTime?: string | null) {
@@ -81,29 +64,20 @@ export function useNightToRise(riseAlarmTime?: string | null) {
 
     if (!active) return { phase: 'inactive-day' as const, label: 'Not scheduled today', endsAt: null };
 
-    const cur = minutesNow(now);
-    const sleep = parseHM(config.sleepTime);
-    const sleepStart = (sleep.h * 60 + sleep.m - config.sleepLockMinutesBefore + 24 * 60) % (24 * 60);
-    // FIX (v2): sleep window no longer force-closes 30 min after target time.
-    // It stays open until the rise alarm (if any); the web overlay mirrors the
-    // native manager's "continuous lock" behavior. Fallback grace kept modest
-    // here since this path is only used for the in-app overlay preview.
-    const sleepEnd = riseAlarmTime ? parseHM(riseAlarmTime).h * 60 + parseHM(riseAlarmTime).m : (sleep.h * 60 + sleep.m + 570) % (24 * 60);
-    const sleepActive = sleepStart <= sleepEnd
-      ? cur >= sleepStart && cur < sleepEnd
-      : cur >= sleepStart || cur < sleepEnd;
-    if (sleepActive) {
+    // Section 0.2 — one shared, midnight-safe calculation for every surface.
+    const w = computeNightWindows({
+      sleepTime: config.sleepTime,
+      riseTime: riseAlarmTime ?? null,
+      lockBeforeMin: config.sleepLockMinutesBefore,
+      lockAfterMin: config.riseLockMinutesAfter,
+      now,
+    });
+
+    if (w.sleepActive) {
       return { phase: 'sleep-lock' as const, label: 'Sleep lock active', endsAt: null };
     }
-
-    if (riseAlarmTime) {
-      const a = parseHM(riseAlarmTime);
-      const riseStart = a.h * 60 + a.m;
-      const riseEnd = (riseStart + config.riseLockMinutesAfter) % (24 * 60);
-      const riseActive = riseStart <= riseEnd
-        ? cur >= riseStart && cur < riseEnd
-        : cur >= riseStart || cur < riseEnd;
-      if (riseActive) return { phase: 'rise-lock' as const, label: 'Rise lock active', endsAt: null };
+    if (w.riseActive) {
+      return { phase: 'rise-lock' as const, label: 'Rise lock active', endsAt: null };
     }
 
     return { phase: 'armed' as const, label: 'Armed', endsAt: null };
