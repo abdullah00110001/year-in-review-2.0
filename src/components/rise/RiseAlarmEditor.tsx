@@ -175,6 +175,8 @@ export function RiseAlarmEditor({
   const [isSaving, setIsSaving]             = useState(false);
   const [, forceTick] = useState(0);
   const wallpaperInputRef = useRef<HTMLInputElement>(null);
+  const [wallpaperLoading, setWallpaperLoading] = useState(false);
+  const wallpaperBusyRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -307,26 +309,65 @@ export function RiseAlarmEditor({
     return `${displayH}:${String(m).padStart(2, '0')} ${ampm}`;
   };
 
-  // ✅ Fix 4: file input — compress করে save করো
-  const handleWallpaperSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Section 0.4 — wallpaper picker.
+  // Previously: every failure silently re-triggered a hidden <input type=file>,
+  // so the user had to tap several times and got zero feedback. Now there is a
+  // single guarded entry point, an explicit permission request, a loading state
+  // and a toast on every outcome.
+  const applyWallpaperFile = async (file: File) => {
+    setWallpaperLoading(true);
     try {
       const compressed = await compressImage(file, 800, 0.7);
       setAlarm((p) => ({ ...p, wallpaper_url: compressed }));
       toast.success('Wallpaper updated');
     } catch {
-      toast.error('Could not load wallpaper');
+      toast.error('Could not read that image. Try another one.');
+    } finally {
+      setWallpaperLoading(false);
     }
-    e.target.value = '';
   };
 
-  // ✅ Fix 5: native picker — compress করে save করো
+  const handleWallpaperSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) { setWallpaperLoading(false); return; }
+    await applyWallpaperFile(file);
+  };
+
+  const openWebFilePicker = () => {
+    setWallpaperLoading(true);
+    // If the user dismisses the chooser there is no event, so clear the
+    // spinner on the next window focus.
+    const clear = () => { setWallpaperLoading(false); window.removeEventListener('focus', clear); };
+    window.addEventListener('focus', clear, { once: true });
+    wallpaperInputRef.current?.click();
+  };
+
   const pickWallpaper = async () => {
+    if (wallpaperBusyRef.current) return; // guard against duplicate taps
+    wallpaperBusyRef.current = true;
     try {
       const { isNative } = await import('@/lib/capacitor/platform');
-      if (!isNative) { wallpaperInputRef.current?.click(); return; }
+      if (!isNative) { openWebFilePicker(); return; }
+
       const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
+
+      // Gallery access needs an explicit grant on Android 13+; without this the
+      // first taps used to fail silently.
+      try {
+        const status = await Camera.checkPermissions();
+        if (status.photos !== 'granted' && status.photos !== 'limited') {
+          const req = await Camera.requestPermissions({ permissions: ['photos'] });
+          if (req.photos !== 'granted' && req.photos !== 'limited') {
+            toast.error('Photo access is needed to pick a wallpaper. Enable it in app settings.');
+            return;
+          }
+        }
+      } catch {
+        /* older platforms without a photos permission model — continue */
+      }
+
+      setWallpaperLoading(true);
       const photo = await Camera.getPhoto({
         source:       CameraSource.Photos,
         resultType:   CameraResultType.DataUrl,
@@ -334,15 +375,23 @@ export function RiseAlarmEditor({
         allowEditing: false,
         width:        800,
       });
+
       const dataUrl = photo.dataUrl;
-      if (!dataUrl || dataUrl.length < 100) { wallpaperInputRef.current?.click(); return; }
+      if (!dataUrl || dataUrl.length < 100) {
+        toast.error('That image could not be loaded. Try another one.');
+        return;
+      }
       const compressed = await compressDataUrl(dataUrl, 800, 0.7);
       setAlarm((p) => ({ ...p, wallpaper_url: compressed }));
       toast.success('Wallpaper updated');
     } catch (err: any) {
       const msg = String(err?.message || err || '');
-      if (/cancel/i.test(msg)) return;
-      wallpaperInputRef.current?.click();
+      if (/cancel/i.test(msg)) return;      // user backed out — stay quiet
+      console.error('[Wallpaper] pick failed', err);
+      toast.error('Could not open the gallery. Please try again.');
+    } finally {
+      setWallpaperLoading(false);
+      wallpaperBusyRef.current = false;
     }
   };
 
@@ -716,9 +765,10 @@ export function RiseAlarmEditor({
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center gap-3">
                       <button
                         onClick={pickWallpaper}
-                        className="flex items-center gap-1.5 bg-white/20 backdrop-blur-sm text-white text-xs font-semibold px-3 py-2 rounded-xl hover:bg-white/30 transition-all"
+                        disabled={wallpaperLoading}
+                        className="flex items-center gap-1.5 disabled:opacity-60 bg-white/20 backdrop-blur-sm text-white text-xs font-semibold px-3 py-2 rounded-xl hover:bg-white/30 transition-all"
                       >
-                        <ImageIcon className="h-3.5 w-3.5" /> Change
+                        <ImageIcon className="h-3.5 w-3.5" /> {wallpaperLoading ? 'Loading…' : 'Change'}
                       </button>
                       <button
                         onClick={handleWallpaperRemove}
@@ -731,14 +781,15 @@ export function RiseAlarmEditor({
                 ) : (
                   <button
                     onClick={pickWallpaper}
-                    className="w-full flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-all"
+                    disabled={wallpaperLoading}
+                    className="w-full flex flex-col disabled:opacity-60 items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border hover:border-primary/50 hover:bg-primary/5 transition-all"
                     style={{ height: 120 }}
                   >
                     <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
                       <ImageIcon className="h-5 w-5 text-muted-foreground" />
                     </div>
                     <div className="text-center">
-                      <p className="text-sm font-medium">Choose from gallery</p>
+                      <p className="text-sm font-medium">{wallpaperLoading ? 'Opening gallery…' : 'Choose from gallery'}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">Shown as background when alarm rings</p>
                     </div>
                   </button>
