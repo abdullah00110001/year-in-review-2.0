@@ -36,6 +36,7 @@ import {
   requestAllAlarmPermissions,
   checkAllAlarmPermissions,
 } from '@/lib/capacitor/nativeAlarm';
+import { canScheduleExactAlarms, openExactAlarmSettings } from '@/lib/capacitor/riseAlarmBridge';
 import { MissionConfigRouter } from '@/components/rise/missions/MissionConfigPages';
 export type MissionDifficulty = 'easy' | 'medium' | 'hard';
 
