@@ -406,14 +406,24 @@ export function RiseAlarmEditor({
     if (alarm.days_of_week.length === 0) {
       toast.info('One-time alarm scheduled for the next occurrence.');
     }
-    if (!permissionsOk) requestAllAlarmPermissions();
+    // Section 0.1 — must be awaited: previously this fired-and-forgot, so the
+    // schedule call ran before the grant and silently did nothing.
+    if (!permissionsOk) {
+      await requestAllAlarmPermissions();
+      const exact = await canScheduleExactAlarms();
+      if (!exact) {
+        toast.error('Allow "Alarms & reminders" so this alarm can fire exactly on time.');
+        await openExactAlarmSettings();
+        return;
+      }
+    }
 
     const alarmId = alarm.id || crypto.randomUUID();
     if (isEditing && alarm.id) await cancelAlarmByUuid(alarm.id);
 
     const days = alarm.days_of_week.length === 0 ? [0,1,2,3,4,5,6] : alarm.days_of_week;
 
-    await scheduleRecurringAlarm(alarmId, alarm.alarm_time, days, {
+    const scheduled = await scheduleRecurringAlarm(alarmId, alarm.alarm_time, days, {
       title:      alarm.label || 'Rise Alarm',
       body:       alarm.intention || 'Time to wake up!',
       missionType: alarm.verification_type as any,
@@ -422,6 +432,13 @@ export function RiseAlarmEditor({
       alarmDbId:  undefined,
       soundUri:   alarm.ringtone_url ?? null,
     });
+
+    // Section 0.1 — the bridge swallows native errors and returns false; the UI
+    // used to ignore that and report success anyway.
+    if (!scheduled) {
+      toast.error('The alarm could not be scheduled on the device. Check alarm permissions.');
+      return;
+    }
 
     const localAlarms  = JSON.parse(localStorage.getItem('local_alarms') || '[]');
     const updatedAlarm = { ...alarm, id: alarmId, is_local: true, is_enabled: true };
