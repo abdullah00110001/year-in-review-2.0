@@ -37,6 +37,7 @@ import {
   checkAllAlarmPermissions,
 } from '@/lib/capacitor/nativeAlarm';
 import { canScheduleExactAlarms, openExactAlarmSettings } from '@/lib/capacitor/riseAlarmBridge';
+import { readLocalAlarms, writeLocalAlarms } from '@/lib/rise/localAlarms';
 import { MissionConfigRouter } from '@/components/rise/missions/MissionConfigPages';
 export type MissionDifficulty = 'easy' | 'medium' | 'hard';
 
@@ -441,7 +442,7 @@ export function RiseAlarmEditor({
       return;
     }
 
-    const localAlarms  = JSON.parse(localStorage.getItem('local_alarms') || '[]');
+    const localAlarms  = [...readLocalAlarms()];
     const updatedAlarm = { ...alarm, id: alarmId, is_local: true, is_enabled: true };
 
     if (isEditing) {
@@ -452,7 +453,7 @@ export function RiseAlarmEditor({
       localAlarms.push(updatedAlarm);
     }
 
-    localStorage.setItem('local_alarms', JSON.stringify(localAlarms));
+    writeLocalAlarms(localAlarms);
     window.dispatchEvent(new Event('localAlarmsUpdated'));
 
     toast.success(isEditing ? 'Alarm updated ✓' : 'Alarm set ✓');
