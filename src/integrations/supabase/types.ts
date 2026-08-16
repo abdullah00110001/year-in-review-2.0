@@ -2801,6 +2801,96 @@ export type Database = {
           },
         ]
       }
+      night_to_rise_events: {
+        Row: {
+          created_at: string
+          id: string
+          occurred_at: string
+          package_name: string | null
+          user_id: string
+          window_type: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          occurred_at?: string
+          package_name?: string | null
+          user_id: string
+          window_type?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          occurred_at?: string
+          package_name?: string | null
+          user_id?: string
+          window_type?: string
+        }
+        Relationships: []
+      }
+      night_to_rise_logs: {
+        Row: {
+          actual_sleep_minutes: number | null
+          blocked_attempts: number
+          created_at: string
+          date: string
+          id: string
+          rise_protected: boolean
+          sleep_protected: boolean
+          target_sleep_minutes: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          actual_sleep_minutes?: number | null
+          blocked_attempts?: number
+          created_at?: string
+          date: string
+          id?: string
+          rise_protected?: boolean
+          sleep_protected?: boolean
+          target_sleep_minutes?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          actual_sleep_minutes?: number | null
+          blocked_attempts?: number
+          created_at?: string
+          date?: string
+          id?: string
+          rise_protected?: boolean
+          sleep_protected?: boolean
+          target_sleep_minutes?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      night_to_rise_pauses: {
+        Row: {
+          created_at: string
+          date: string
+          id: string
+          reason: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          date: string
+          id?: string
+          reason?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          date?: string
+          id?: string
+          reason?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       notification_preferences: {
         Row: {
           achievement_alerts: boolean | null
