@@ -40,6 +40,19 @@ export interface NightToRiseConfig {
    * feature can't be used to silently disable protection every night.
    */
   pauseHistory: string[];
+  /** SECTION 4 — strict mode 24h commitment lock (ISO date) while enabled. */
+  strictLockedUntil?: string | null;
+  /** SECTION 4 — pending emergency-unlock request (epoch ms) under strict mode. */
+  strictUnlockRequestedAt?: number | null;
+  /** SECTION 4 — chronotype onboarding result. */
+  chronotype?: 'lark' | 'neutral' | 'owl' | null;
+  chronotypeAnswered?: boolean;
+  /** Gradual Shift Assistant — intermediate target while easing to sleepTime. */
+  shiftTargetTime?: string | null;
+  /** Custom-schedule weekend target (used for the social-jetlag warning). */
+  weekendSleepTime?: string | null;
+  /** Alarm volume ramp length in seconds (mirrored to native prefs). */
+  alarmRampSeconds?: number;
 }
 
 /** PHASE 2 — popular distraction apps suggested by default. */
@@ -91,7 +104,21 @@ export const DEFAULT_CONFIG: NightToRiseConfig = {
   configured: false,
   shareWithGroup: false,
   pauseHistory: [],
+  strictLockedUntil: null,
+  strictUnlockRequestedAt: null,
+  chronotype: null,
+  chronotypeAnswered: false,
+  shiftTargetTime: null,
+  weekendSleepTime: null,
+  alarmRampSeconds: 45,
 };
+
+/** SECTION 4 — strict mode commits the user for 24 hours. */
+export const STRICT_LOCK_MS = 24 * 60 * 60 * 1000;
+
+/** Reasons offered when pausing for one night. */
+export const PAUSE_REASONS = ['Travel', 'Emergency', 'Illness', 'Other'] as const;
+export type PauseReason = (typeof PAUSE_REASONS)[number];
 
 /**
  * Apps that can never be blocked, for user safety. Enforced in the UI so a
