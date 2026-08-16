@@ -529,24 +529,46 @@ input, textarea, [contenteditable="true"] {
    ========================================================================== */
 .n2r {
   color: hsl(var(--foreground));
-  background: hsl(var(--background));
+  /* Fallbacks: the live values come from useTimeTheme() as inline vars. */
+  --stf-bg-start: hsl(var(--background));
+  --stf-bg-end: hsl(var(--background));
+  --stf-accent: hsl(var(--primary));
+  background:
+    linear-gradient(180deg, var(--stf-bg-start) 0%, var(--stf-bg-end) 62%, hsl(var(--background)) 100%);
+  transition: background 1.2s linear;
 }
 
-/* Subtle ambient tint per phase — token based, no hard-coded palette. */
-.n2r[data-phase='sleep-lock'] {
-  background:
-    radial-gradient(120% 70% at 50% -10%, hsl(var(--primary) / 0.10) 0%, transparent 60%),
-    hsl(var(--background));
-}
+/* Ambient overlay per phase — token based, no hard-coded palette. */
+.n2r[data-phase='sleep-lock'],
 .n2r[data-phase='rise-lock'] {
-  background:
-    radial-gradient(120% 70% at 50% -10%, hsl(var(--warning) / 0.14) 0%, transparent 60%),
-    hsl(var(--background));
+  /* Locked: warm, static, no continuous animation (melatonin-safe). */
+  transition: none;
 }
 
-/* Typography follows the app: Nunito / Hind Siliguri, mono for timers only. */
-.n2r-display { font-family: inherit; font-weight: 700; letter-spacing: -0.01em; }
-.n2r-mono { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+/* Surfaces float above the ombré so text contrast never depends on the sky. */
+.n2r-surface {
+  background: hsl(var(--background) / 0.86);
+  backdrop-filter: blur(14px);
+}
+
+.n2r-accent-text { color: var(--stf-accent); }
+.n2r-accent-bg { background: var(--stf-accent); }
+.n2r-accent-ring { box-shadow: 0 0 0 1px color-mix(in srgb, var(--stf-accent) 45%, transparent); }
+
+/* Display font ONLY for hero numerals (streak, target time). */
+.n2r-display {
+  font-family: 'Fraunces', ui-serif, Georgia, serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+/* Instrument-like mono for every clock readout / countdown. */
+.n2r-mono {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
 
 .n2r-card {
   background: hsl(var(--card));
