@@ -40,6 +40,9 @@ public class NightToRisePreferences {
     private static final String K_BLOCKED_SITES    = "blockedSites";           // CSV  (PHASE 2)
     private static final String K_BLOCKED_KEYWORDS = "blockedKeywords";        // CSV  (PHASE 2)
     private static final String K_BLOCKLIST_MODE   = "blocklistMode";          // blocklist|allowlist
+    private static final String K_STRICT_UNTIL_MS  = "strictModeLockedUntil";   // SECTION 4/5
+    private static final String K_RAMP_SECONDS     = "alarmVolumeRampSeconds";  // SECTION 5
+    private static final String K_CHRONOTYPE       = "chronotypeEstimate";      // SECTION 5
 
     private final SharedPreferences sp;
 
@@ -95,6 +98,17 @@ public class NightToRisePreferences {
         e.putString(K_BLOCKED_SITES,    joinStrings(o.optJSONArray("blockedSites")));
         e.putString(K_BLOCKED_KEYWORDS, joinStrings(o.optJSONArray("blockedKeywords")));
 
+        e.putInt   (K_RAMP_SECONDS, o.optInt("alarmRampSeconds", 45));
+        e.putString(K_CHRONOTYPE,   o.optString("chronotype", ""));
+
+        String strictUntil = o.optString("strictLockedUntil", null);
+        if (strictUntil != null && !strictUntil.isEmpty() && !"null".equals(strictUntil)) {
+            try { e.putLong(K_STRICT_UNTIL_MS, java.time.Instant.parse(strictUntil).toEpochMilli()); }
+            catch (Throwable ignored) { e.remove(K_STRICT_UNTIL_MS); }
+        } else {
+            e.remove(K_STRICT_UNTIL_MS);
+        }
+
         String paused = o.optString("pausedUntil", null);
         if (paused != null && !paused.isEmpty() && !"null".equals(paused)) {
             try { e.putLong(K_PAUSED_UNTIL_MS, java.time.Instant.parse(paused).toEpochMilli()); }
@@ -129,6 +143,11 @@ public class NightToRisePreferences {
     public boolean strictMode()       { return sp.getBoolean(K_STRICT_MODE, false); }
     public long    pausedUntilMs()    { return sp.getLong(K_PAUSED_UNTIL_MS, 0L); }
     public long    riseAlarmMs()      { return sp.getLong(K_RISE_ALARM_MS, 0L); }
+    public long    strictLockedUntilMs() { return sp.getLong(K_STRICT_UNTIL_MS, 0L); }
+    /** Native-side enforcement: reject settings writes while the 24h commit runs. */
+    public boolean strictSettingsLocked() { return strictMode() && strictLockedUntilMs() > System.currentTimeMillis(); }
+    public int     alarmRampSeconds() { return sp.getInt(K_RAMP_SECONDS, 45); }
+    public String  chronotype()       { return sp.getString(K_CHRONOTYPE, ""); }
 
     public Set<Integer> scheduleDays() {
         Set<Integer> out = new HashSet<>();
