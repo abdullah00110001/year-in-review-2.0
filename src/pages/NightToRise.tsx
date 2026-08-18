@@ -41,7 +41,6 @@ import { useNightToRise } from '@/components/rise/night-to-rise/useNightToRise';
 import { useNightToRiseStreak } from '@/components/rise/night-to-rise/useNightToRiseStreak';
 import { useNightToRiseLogs } from '@/hooks/useNightToRiseLogs';
 import { NightArc } from '@/components/rise/night-to-rise/NightArc';
-import { NightToRiseBlocklist } from '@/components/rise/night-to-rise/NightToRiseBlocklist';
 import { NightToRiseInsights } from '@/components/rise/night-to-rise/NightToRiseInsights';
 import { InstalledAppPicker } from '@/components/rise/night-to-rise/InstalledAppPicker';
 import { NightToRisePermissions } from '@/components/rise/night-to-rise/NightToRisePermissions';
@@ -341,11 +340,11 @@ export default function NightToRisePage() {
 
               <GroupLabel>Blocking</GroupLabel>
 
-              <Section icon={<Ban className="h-4 w-4" />} title="Blocked Apps" subtitle="Locked during the sleep & rise windows">
-                <NightToRiseBlocklist config={config} update={update} />
-              </Section>
-
-              <Section icon={<Smartphone className="h-4 w-4" />} title="Allowed Apps" subtitle="These stay open during locked windows">
+              <Section
+                icon={<Smartphone className="h-4 w-4" />}
+                title="Allowed Apps"
+                subtitle="Only these stay open during locked windows — everything else is blocked"
+              >
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-2">
                     {config.allowedApps.map((a) => {
@@ -375,7 +374,8 @@ export default function NightToRisePage() {
                     Choose from installed apps
                   </Button>
                   <p className="text-[11px] text-muted-foreground">
-                    Phone, Clock and Emergency can never be blocked.
+                    While a lock window is active, apps outside your allowed list can't be
+                    opened. Phone, Messages, Clock and Emergency are always available.
                   </p>
                 </div>
               </Section>
