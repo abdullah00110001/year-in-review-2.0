@@ -58,9 +58,13 @@ public final class NightToRiseDecider {
         public long    riseAlarmMs;
         public String  scheduleMode = "everyday";
         public Set<Integer> scheduleDays = new HashSet<>();
+        /** The ONLY packages the user may foreground during a lock window. */
         public Set<String>  allowedPackages = Collections.emptySet();
-        public Set<String>  blockedPackages = Collections.emptySet();
-        public String  blocklistMode = "blocklist";
+        /**
+         * Runtime-resolved safety exemptions (e.g. the device's default SMS
+         * app), added on top of the hardcoded SAFE_* lists.
+         */
+        public Set<String>  extraSafePackages = Collections.emptySet();
         public String  sleepMessage = "Time to rest.";
         public String  riseMessage  = "Start your morning right.";
         /** Our own package — always exempt. */
@@ -68,6 +72,7 @@ public final class NightToRiseDecider {
         /** Injectable for deterministic tests. */
         public TimeZone timeZone = TimeZone.getDefault();
     }
+
 
     public static class Decision {
         public final Phase phase;
