@@ -48,8 +48,8 @@ public class NightToRiseManager {
         cfg.scheduleMode    = prefs.scheduleMode();
         cfg.scheduleDays    = prefs.scheduleDays();
         cfg.allowedPackages = prefs.allowedPackages();
-        cfg.blockedPackages = prefs.blockedPackages();
-        cfg.blocklistMode   = prefs.blocklistMode();
+        cfg.extraSafePackages = safetyPackages();
+
         cfg.sleepMessage    = prefs.sleepMessage();
         cfg.riseMessage     = prefs.riseMessage();
         cfg.selfPackage     = selfPackage;
