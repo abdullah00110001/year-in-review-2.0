@@ -435,39 +435,9 @@ public class ShieldAccessibilityService extends AccessibilityService {
     }
 
 
-    // ==========================================
-    // PHASE 2: Night to Rise — site / keyword blocking inside lock windows
-    // ==========================================
-    private boolean checkNightToRiseUrl(String url) {
-        try {
-            com.mylifeos.app.nighttorise.NightToRiseManager n2r =
-                new com.mylifeos.app.nighttorise.NightToRiseManager(this);
-            com.mylifeos.app.nighttorise.NightToRiseManager.Decision d =
-                n2r.decide(System.currentTimeMillis(), null);
-            if (d.phase != com.mylifeos.app.nighttorise.NightToRiseManager.Phase.SLEEP_LOCK
-                && d.phase != com.mylifeos.app.nighttorise.NightToRiseManager.Phase.RISE_LOCK) return false;
+    // Sleep to Rise has no site/keyword model anymore — enforcement is
+    // allowlist-only at the package level (see onAccessibilityEvent).
 
-            String host = extractDomain(url);
-            boolean hit = ContentMatcher.matchesDomain(host, n2r.prefs().blockedSites());
-            if (!hit) {
-                hit = ContentMatcher.matchesKeyword(url, n2r.prefs().blockedKeywords());
-            }
-            if (!hit) return false;
-
-            lastBlockedUrl = url;
-            Intent i = new Intent(this, com.mylifeos.app.nighttorise.NightToRiseBlockActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_MESSAGE, d.message);
-            i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_END_MS, d.endTimeMs);
-            i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_STRICT, n2r.prefs().strictMode());
-            startActivity(i);
-            resetLastBlockedUrl();
-            return true;
-        } catch (Throwable t) {
-            Log.w(TAG, "NightToRise url check failed", t);
-            return false;
-        }
-    }
 
     // ==========================================
     // URL Block
