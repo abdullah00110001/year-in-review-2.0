@@ -11,19 +11,11 @@ export interface NightToRiseConfig {
   sleepTime: string; // "HH:MM" 24h
   sleepLockMinutesBefore: number;
   riseLockMinutesAfter: number;
-  allowedApps: AllowedApp[];
-  /** PHASE 2 — distraction apps blocked during sleep/rise windows. */
-  blockedApps: AllowedApp[];
-  /** PHASE 2 — distracting sites blocked in the browser during lock windows. */
-  blockedSites: string[];
-  /** PHASE 2 — block any URL/search containing these keywords. */
-  blockedKeywords: string[];
   /**
-   * PHASE 2 — enforcement strategy:
-   *  - 'blocklist': only the blocked apps/sites are locked
-   *  - 'allowlist': everything is locked except the allowed apps (stricter)
+   * The ONLY apps that may be opened while a lock window is active.
+   * Everything else is blocked by default (allowlist model).
    */
-  blocklistMode: 'blocklist' | 'allowlist';
+  allowedApps: AllowedApp[];
   sleepBlockMessage: string;
   riseBlockMessage: string;
   scheduleMode: ScheduleMode;
@@ -55,7 +47,7 @@ export interface NightToRiseConfig {
   alarmRampSeconds?: number;
 }
 
-/** PHASE 2 — popular distraction apps suggested by default. */
+/** Popular apps, used as a web fallback list inside the app picker. */
 export const SUGGESTED_BLOCK_APPS: AllowedApp[] = [
   { id: 'com.facebook.katana', name: 'Facebook' },
   { id: 'com.instagram.android', name: 'Instagram' },
@@ -69,16 +61,6 @@ export const SUGGESTED_BLOCK_APPS: AllowedApp[] = [
   { id: 'com.reddit.frontpage', name: 'Reddit' },
 ];
 
-/** PHASE 2 — commonly blocked distracting sites. */
-export const SUGGESTED_BLOCK_SITES = [
-  'facebook.com',
-  'instagram.com',
-  'tiktok.com',
-  'youtube.com',
-  'x.com',
-  'reddit.com',
-];
-
 export const DEFAULT_CONFIG: NightToRiseConfig = {
   enabled: false,
   sleepTime: '22:30',
@@ -90,10 +72,6 @@ export const DEFAULT_CONFIG: NightToRiseConfig = {
     { id: 'com.google.android.deskclock', name: 'Clock (Google)' },
   ],
 
-  blockedApps: SUGGESTED_BLOCK_APPS.slice(0, 4),
-  blockedSites: [],
-  blockedKeywords: [],
-  blocklistMode: 'blocklist',
   sleepBlockMessage: 'Time to rest. Put the phone down. 🌙',
   riseBlockMessage: 'Start your morning right. No scrolling yet. 🌅',
   scheduleMode: 'everyday',
