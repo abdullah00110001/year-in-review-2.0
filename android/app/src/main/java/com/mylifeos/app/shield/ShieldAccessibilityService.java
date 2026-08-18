@@ -363,8 +363,6 @@ public class ShieldAccessibilityService extends AccessibilityService {
              type == AccessibilityEvent.TYPE_VIEW_SCROLLED)) {
             String url = extractUrlFromBrowser(packageName, getRootInActiveWindow());
             if (url != null && !url.isEmpty() && !url.equals(lastBlockedUrl)) {
-                // PHASE 2 — Night to Rise site/keyword blocking inside lock windows.
-                if (checkNightToRiseUrl(url)) return;
                 checkAndBlockUrl(url, packageName);
             }
         }
