@@ -16,8 +16,7 @@ import java.util.HashSet;
 import java.util.TimeZone;
 
 /**
- * Unit tests for the pure Sleep-to-Rise decider: midnight rollover, blocklist
- * vs allowlist, safety exemptions, alarm hand-off and schedule days.
+ * Unit tests for the pure Sleep-to-Rise decider: midnight rollover, allowlist, safety exemptions, alarm hand-off and schedule days.
  */
 public class NightToRiseDeciderTest {
 
@@ -39,8 +38,6 @@ public class NightToRiseDeciderTest {
         cfg.sleepBeforeMin = 30;   // lock starts 22:00
         cfg.riseAfterMin = 30;
         cfg.scheduleMode = "everyday";
-        cfg.blocklistMode = "blocklist";
-        cfg.blockedPackages = new HashSet<>(Arrays.asList("com.instagram.android"));
         cfg.allowedPackages = new HashSet<>();
         cfg.selfPackage = "com.mylifeos.app";
         return cfg;
@@ -69,7 +66,6 @@ public class NightToRiseDeciderTest {
 
     @Test public void dialerClockAndSelfAreAlwaysSafe() {
         Config cfg = base();
-        cfg.blocklistMode = "allowlist";
         long now = at(2026, 2, 10, 23, 0);
         for (String pkg : new String[]{
             "com.android.dialer", "com.android.emergency", "com.google.android.deskclock",
@@ -82,16 +78,22 @@ public class NightToRiseDeciderTest {
 
     // ── Blocklist vs allowlist ──────────────────────────────────────
 
-    @Test public void blocklistOnlyLocksListedApps() {
+    @Test public void everythingOutsideTheAllowlistIsLocked() {
         Config cfg = base();
         long now = at(2026, 2, 10, 23, 0); // inside sleep window
         assertTrue(NightToRiseDecider.decide(cfg, now, "com.instagram.android").shouldBlock);
-        assertFalse(NightToRiseDecider.decide(cfg, now, "com.some.notes").shouldBlock);
+        assertTrue(NightToRiseDecider.decide(cfg, now, "com.some.notes").shouldBlock);
+    }
+
+    @Test public void runtimeSafetyPackagesAreExempt() {
+        Config cfg = base();
+        cfg.extraSafePackages = new HashSet<>(Arrays.asList("com.oem.messages"));
+        long now = at(2026, 2, 10, 23, 0);
+        assertFalse(NightToRiseDecider.decide(cfg, now, "com.oem.messages").shouldBlock);
     }
 
     @Test public void allowlistLocksEverythingExceptAllowed() {
         Config cfg = base();
-        cfg.blocklistMode = "allowlist";
         cfg.allowedPackages = new HashSet<>(Arrays.asList("com.spotify.music"));
         long now = at(2026, 2, 10, 23, 0);
         assertTrue(NightToRiseDecider.decide(cfg, now, "com.some.notes").shouldBlock);

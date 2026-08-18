@@ -80,23 +80,12 @@ public class NightToRisePreferences {
         }
         e.putString(K_ALLOWED_PACKAGES, aCsv.toString());
 
-        // ---- PHASE 2: blocklist (apps / sites / keywords) + enforcement mode ----
-        e.putString(K_BLOCKLIST_MODE, o.optString("blocklistMode", "blocklist"));
+        // Sleep to Rise is allowlist-only: legacy blocklist keys are cleared.
+        e.remove(K_BLOCKLIST_MODE);
+        e.remove(K_BLOCKED_PACKAGES);
+        e.remove(K_BLOCKED_SITES);
+        e.remove(K_BLOCKED_KEYWORDS);
 
-        JSONArray blocked = o.optJSONArray("blockedApps");
-        StringBuilder bCsv = new StringBuilder();
-        if (blocked != null) for (int i = 0; i < blocked.length(); i++) {
-            JSONObject a = blocked.optJSONObject(i);
-            if (a == null) continue;
-            String id = a.optString("id", "");
-            if (id.isEmpty()) continue;
-            if (bCsv.length() > 0) bCsv.append(",");
-            bCsv.append(id);
-        }
-        e.putString(K_BLOCKED_PACKAGES, bCsv.toString());
-
-        e.putString(K_BLOCKED_SITES,    joinStrings(o.optJSONArray("blockedSites")));
-        e.putString(K_BLOCKED_KEYWORDS, joinStrings(o.optJSONArray("blockedKeywords")));
 
         e.putInt   (K_RAMP_SECONDS, o.optInt("alarmRampSeconds", 45));
         e.putString(K_CHRONOTYPE,   o.optString("chronotype", ""));
@@ -156,11 +145,8 @@ public class NightToRisePreferences {
         return out;
     }
 
-    public String  blocklistMode()    { return sp.getString(K_BLOCKLIST_MODE, "blocklist"); }
 
-    public Set<String> blockedPackages()  { return csvSet(K_BLOCKED_PACKAGES); }
-    public Set<String> blockedSites()     { return csvSet(K_BLOCKED_SITES); }
-    public Set<String> blockedKeywords()  { return csvSet(K_BLOCKED_KEYWORDS); }
+
 
     private Set<String> csvSet(String key) {
         Set<String> out = new HashSet<>();

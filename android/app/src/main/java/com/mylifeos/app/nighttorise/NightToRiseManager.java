@@ -29,13 +29,38 @@ public class NightToRiseManager {
 
     private final NightToRisePreferences prefs;
     private final String selfPackage;
+    private final Context appCtx;
 
     public NightToRiseManager(Context ctx) {
         this.prefs = new NightToRisePreferences(ctx);
-        this.selfPackage = ctx.getApplicationContext().getPackageName();
+        this.appCtx = ctx.getApplicationContext();
+        this.selfPackage = appCtx.getPackageName();
     }
 
     public NightToRisePreferences prefs() { return prefs; }
+
+    /**
+     * Runtime safety exemptions that can only be resolved on-device: the user's
+     * default SMS app and the default dialer. These are ALWAYS reachable during
+     * a lock window, whatever the allowlist says.
+     */
+    private java.util.Set<String> safetyPackages() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try {
+            String sms = android.provider.Telephony.Sms.getDefaultSmsPackage(appCtx);
+            if (sms != null) out.add(sms);
+        } catch (Throwable ignored) {}
+        try {
+            android.telecom.TelecomManager tm =
+                (android.telecom.TelecomManager) appCtx.getSystemService(Context.TELECOM_SERVICE);
+            if (tm != null) {
+                String dialer = tm.getDefaultDialerPackage();
+                if (dialer != null) out.add(dialer);
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
 
     public NightToRiseDecider.Config snapshot() {
         NightToRiseDecider.Config cfg = new NightToRiseDecider.Config();
@@ -48,8 +73,8 @@ public class NightToRiseManager {
         cfg.scheduleMode    = prefs.scheduleMode();
         cfg.scheduleDays    = prefs.scheduleDays();
         cfg.allowedPackages = prefs.allowedPackages();
-        cfg.blockedPackages = prefs.blockedPackages();
-        cfg.blocklistMode   = prefs.blocklistMode();
+        cfg.extraSafePackages = safetyPackages();
+
         cfg.sleepMessage    = prefs.sleepMessage();
         cfg.riseMessage     = prefs.riseMessage();
         cfg.selfPackage     = selfPackage;

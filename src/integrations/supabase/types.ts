@@ -2801,6 +2801,30 @@ export type Database = {
           },
         ]
       }
+      night_to_rise_allowed_apps: {
+        Row: {
+          added_at: string
+          app_label: string | null
+          id: string
+          package_name: string
+          user_id: string
+        }
+        Insert: {
+          added_at?: string
+          app_label?: string | null
+          id?: string
+          package_name: string
+          user_id: string
+        }
+        Update: {
+          added_at?: string
+          app_label?: string | null
+          id?: string
+          package_name?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       night_to_rise_events: {
         Row: {
           created_at: string
