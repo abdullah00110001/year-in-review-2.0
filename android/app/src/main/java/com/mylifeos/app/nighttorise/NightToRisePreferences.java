@@ -145,11 +145,8 @@ public class NightToRisePreferences {
         return out;
     }
 
-    public String  blocklistMode()    { return sp.getString(K_BLOCKLIST_MODE, "blocklist"); }
 
-    public Set<String> blockedPackages()  { return csvSet(K_BLOCKED_PACKAGES); }
-    public Set<String> blockedSites()     { return csvSet(K_BLOCKED_SITES); }
-    public Set<String> blockedKeywords()  { return csvSet(K_BLOCKED_KEYWORDS); }
+
 
     private Set<String> csvSet(String key) {
         Set<String> out = new HashSet<>();
