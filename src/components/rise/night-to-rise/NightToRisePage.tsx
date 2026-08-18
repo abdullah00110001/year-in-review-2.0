@@ -54,14 +54,14 @@ export function NightToRisePage({ open, onClose, riseAlarmTime }: Props) {
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="bottom" className="h-[95vh] overflow-y-auto p-0">
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-gradient-to-br from-indigo-950 via-slate-900 to-purple-950 px-4 py-4 text-white">
+        <div className="sticky top-0 z-10 border-b border-border bg-card px-4 py-4 text-foreground">
           <div className="flex items-center gap-3">
-            <button onClick={onClose} className="rounded-lg p-1.5 hover:bg-white/10">
+            <button onClick={onClose} className="rounded-lg p-1.5 hover:bg-muted">
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="flex-1">
               <h2 className="text-lg font-semibold">Sleep to Rise</h2>
-              <p className="text-xs text-indigo-200/80">Sleep & Wake Protection</p>
+              <p className="text-xs text-muted-foreground">Sleep &amp; Wake Protection</p>
             </div>
             <Switch
               checked={config.enabled}
@@ -69,11 +69,11 @@ export function NightToRisePage({ open, onClose, riseAlarmTime }: Props) {
             />
           </div>
           {status.phase !== 'off' && (
-            <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs">
+            <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
               <span className={cn(
                 'h-2 w-2 rounded-full',
-                status.phase === 'sleep-lock' || status.phase === 'rise-lock' ? 'bg-emerald-400 animate-pulse' :
-                status.phase === 'paused' ? 'bg-amber-400' : 'bg-indigo-300',
+                status.phase === 'sleep-lock' || status.phase === 'rise-lock' ? 'bg-primary' :
+                status.phase === 'paused' ? 'bg-warning' : 'bg-muted-foreground',
               )} />
               {status.label ?? 'Armed'}
             </div>

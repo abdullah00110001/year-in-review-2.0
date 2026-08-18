@@ -352,6 +352,24 @@ export function RiseAlarmEditor({
       const { isNative } = await import('@/lib/capacitor/platform');
       if (!isNative) { openWebFilePicker(); return; }
 
+      // 1) Android system photo picker — needs NO permission, so it works even
+      //    when media access is denied. This is what made wallpaper picking
+      //    fail before: we asked for READ_MEDIA_IMAGES and gave up on denial.
+      const { pickImageWithSystemPicker } = await import('@/lib/capacitor/nativePhotoPicker');
+      const picked = await pickImageWithSystemPicker();
+      if (picked.status === 'cancelled') return;
+      if (picked.status === 'picked') {
+        setWallpaperLoading(true);
+        const compressed = await compressDataUrl(picked.dataUrl, 800, 0.7);
+        setAlarm((p) => ({ ...p, wallpaper_url: compressed }));
+        toast.success('Wallpaper updated');
+        return;
+      }
+      if (picked.status === 'error') {
+        console.warn('[Wallpaper] system picker error, falling back', picked.message);
+      }
+
+      // 2) Fallback: Capacitor Camera (older devices / picker unavailable).
       const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
 
       // Gallery access needs an explicit grant on Android 13+; without this the

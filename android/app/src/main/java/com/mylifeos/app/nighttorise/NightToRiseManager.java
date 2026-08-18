@@ -1,27 +1,21 @@
 package com.mylifeos.app.nighttorise;
 
 import android.content.Context;
-import java.util.Calendar;
-import java.util.Set;
 
 /**
- * NightToRiseManager — pure decision logic. Given the current time, returns
- * whether the foreground app should be blocked, in which phase, and the
- * message/end-time to display on the block screen.
+ * NightToRiseManager — thin Android adapter over {@link NightToRiseDecider}.
  *
- * FIX (v2): Sleep lock no longer auto-releases after a fixed 30-min grace.
- * It now runs continuously from the sleep-start time until either:
- *   - the next Rise alarm fires (seamless hand-off to RISE_LOCK), or
- *   - DEFAULT_MAX_LOCK_MINUTES elapses, if no alarm is set.
- * This closes the "gap window" where nothing was blocked between the old
- * 30-min grace and the alarm going off.
+ * All decision logic lives in the decider (pure, unit tested). This class only
+ * reads persisted preferences and maps them onto a Config snapshot.
+ *
+ * Sleep lock runs continuously from the configured pre-sleep start until either
+ * the next Rise alarm fires (seamless hand-off to RISE_LOCK) or the fallback
+ * maximum elapses when no alarm is set — there is no gap window.
  */
 public class NightToRiseManager {
 
+    /** Kept as an alias so existing call sites keep compiling. */
     public enum Phase { OFF, ARMED, SLEEP_LOCK, RISE_LOCK, PAUSED, INACTIVE_DAY }
-
-    /** Fallback lock duration when no rise alarm is configured (9.5 hours). */
-    private static final int DEFAULT_MAX_LOCK_MINUTES = 570;
 
     public static class Decision {
         public final Phase phase;
@@ -34,103 +28,62 @@ public class NightToRiseManager {
     }
 
     private final NightToRisePreferences prefs;
+    private final String selfPackage;
 
     public NightToRiseManager(Context ctx) {
         this.prefs = new NightToRisePreferences(ctx);
+        this.selfPackage = ctx.getApplicationContext().getPackageName();
     }
 
     public NightToRisePreferences prefs() { return prefs; }
 
-    /** Compute current decision. */
+    public NightToRiseDecider.Config snapshot() {
+        NightToRiseDecider.Config cfg = new NightToRiseDecider.Config();
+        cfg.enabled         = prefs.isEnabled();
+        cfg.pausedUntilMs   = prefs.pausedUntilMs();
+        cfg.sleepTime       = prefs.sleepTime();
+        cfg.sleepBeforeMin  = prefs.sleepBeforeMin();
+        cfg.riseAfterMin    = prefs.riseAfterMin();
+        cfg.riseAlarmMs     = prefs.riseAlarmMs();
+        cfg.scheduleMode    = prefs.scheduleMode();
+        cfg.scheduleDays    = prefs.scheduleDays();
+        cfg.allowedPackages = prefs.allowedPackages();
+        cfg.blockedPackages = prefs.blockedPackages();
+        cfg.blocklistMode   = prefs.blocklistMode();
+        cfg.sleepMessage    = prefs.sleepMessage();
+        cfg.riseMessage     = prefs.riseMessage();
+        cfg.selfPackage     = selfPackage;
+        return cfg;
+    }
+
+    /** Compute the current decision for a foreground package. */
     public Decision decide(long nowMs, String foregroundPackage) {
-        if (!prefs.isEnabled()) return new Decision(Phase.OFF, false, 0, "");
-        if (prefs.pausedUntilMs() > nowMs) return new Decision(Phase.PAUSED, false, prefs.pausedUntilMs(), "");
-
-        Set<String> allowed = prefs.allowedPackages();
-        if (foregroundPackage != null && allowed.contains(foregroundPackage)) {
-            return new Decision(Phase.ARMED, false, 0, "");
-        }
-
-        // PHASE 2 — enforcement strategy. In "blocklist" mode only the apps the
-        // user explicitly picked are locked; in "allowlist" mode everything that
-        // is not on the allow-list is locked (the stricter option).
-        if ("blocklist".equals(prefs.blocklistMode())
-            && foregroundPackage != null
-            && !prefs.blockedPackages().contains(foregroundPackage)) {
-            return new Decision(Phase.ARMED, false, 0, "");
-        }
-
-        // ---- Sleep-start time (today or yesterday, whichever is most recent) ----
-        String[] s = prefs.sleepTime().split(":");
-        int sh = Integer.parseInt(s[0]), sm = Integer.parseInt(s[1]);
-        int sleepStartMin = ((sh * 60 + sm) - prefs.sleepBeforeMin() + 1440) % 1440;
-        long sleepStartMs = mostRecentOccurrence(sleepStartMin, nowMs);
-
-        // Schedule-day check uses the DAY THE SLEEP WINDOW STARTED, not "now",
-        // since "now" may already be past midnight into the next calendar day.
-        if (!isDayActive(sleepStartMs)) {
-            // Even if today isn't scheduled, a rise-lock from a still-open alarm
-            // (set on a previous active day) should still be honored below.
-            Decision riseOnly = checkRiseOnly(nowMs);
-            if (riseOnly != null) return riseOnly;
-            return new Decision(Phase.INACTIVE_DAY, false, 0, "");
-        }
-
-        long alarmMs = prefs.riseAlarmMs();
-        boolean hasAlarm = alarmMs > sleepStartMs; // alarm belongs to this sleep window
-
-        if (hasAlarm) {
-            long riseEnd = alarmMs + (long) prefs.riseAfterMin() * 60_000L;
-            if (nowMs >= sleepStartMs && nowMs < alarmMs) {
-                return new Decision(Phase.SLEEP_LOCK, true, alarmMs, prefs.sleepMessage());
-            }
-            if (nowMs >= alarmMs && nowMs < riseEnd) {
-                return new Decision(Phase.RISE_LOCK, true, riseEnd, prefs.riseMessage());
-            }
-        } else {
-            long fallbackEnd = sleepStartMs + (long) DEFAULT_MAX_LOCK_MINUTES * 60_000L;
-            if (nowMs >= sleepStartMs && nowMs < fallbackEnd) {
-                return new Decision(Phase.SLEEP_LOCK, true, fallbackEnd, prefs.sleepMessage());
-            }
-        }
-
-        return new Decision(Phase.ARMED, false, 0, "");
+        NightToRiseDecider.Decision d =
+            NightToRiseDecider.decide(snapshot(), nowMs, foregroundPackage);
+        return new Decision(Phase.valueOf(d.phase.name()), d.shouldBlock, d.endTimeMs, d.message);
     }
 
     /**
-     * Handles the edge case where the sleep window started on a scheduled day
-     * but has rolled into a non-scheduled day (e.g. sleep Sun night -> wake
-     * Mon, but only "weekdays" or a custom set that excludes Sunday is active).
-     * We still allow a currently-open rise-lock to finish naturally.
+     * Called from BootReceiver: the stored Rise alarm reference points at a
+     * timestamp that may have passed while the phone was off, which would leave
+     * the Rise window permanently "already ended". Re-point it at the earliest
+     * future alarm shot that survived the reboot so Sleep/Rise enforcement
+     * keeps working without waiting for the app to be opened.
      */
-    private Decision checkRiseOnly(long nowMs) {
-        long alarmMs = prefs.riseAlarmMs();
-        if (alarmMs <= 0) return null;
-        long riseEnd = alarmMs + (long) prefs.riseAfterMin() * 60_000L;
-        if (nowMs >= alarmMs && nowMs < riseEnd) {
-            return new Decision(Phase.RISE_LOCK, true, riseEnd, prefs.riseMessage());
+    public static void onBootRestored(Context ctx) {
+        NightToRisePreferences p = new NightToRisePreferences(ctx);
+        long now = System.currentTimeMillis();
+        if (p.riseAlarmMs() > now) return;
+
+        long earliest = Long.MAX_VALUE;
+        for (com.mylifeos.app.rise.scheduler.RiseAlarmStore.Shot s
+                : com.mylifeos.app.rise.scheduler.RiseAlarmStore.all(ctx)) {
+            if (s == null) continue;
+            long when = s.dayOfWeek >= 0
+                ? com.mylifeos.app.rise.core.AlarmTimeMath.rollForwardWeekly(s.timeInMillis, now)
+                : s.timeInMillis;
+            if (when > now && when < earliest) earliest = when;
         }
-        return null;
-    }
-
-    private boolean isDayActive(long atMs) {
-        Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(atMs);
-        int dow = c.get(Calendar.DAY_OF_WEEK) - 1; // 0=Sun..6=Sat
-        String mode = prefs.scheduleMode();
-        if ("everyday".equals(mode)) return true;
-        if ("weekdays".equals(mode)) return dow >= 1 && dow <= 5;
-        return prefs.scheduleDays().contains(dow);
-    }
-
-    /** Latest timestamp <= nowMs at which the clock read `minuteOfDay`. */
-    private long mostRecentOccurrence(int minuteOfDay, long nowMs) {
-        Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(nowMs);
-        c.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
-        c.set(Calendar.MINUTE, minuteOfDay % 60);
-        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0);
-        if (c.getTimeInMillis() > nowMs) c.add(Calendar.DAY_OF_MONTH, -1);
-        return c.getTimeInMillis();
+        if (earliest != Long.MAX_VALUE) p.saveRiseAlarmMillis(earliest);
     }
 }

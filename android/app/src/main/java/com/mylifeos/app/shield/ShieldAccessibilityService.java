@@ -37,11 +37,33 @@ public class ShieldAccessibilityService extends AccessibilityService {
     private ShieldTimerManager timerManager;
 
 
-    private String lastBlockedPackage = "";
     private String lastBlockedUrl = "";
     private long lastScanTime = 0;
 
     private static final long SCAN_COOLDOWN_MS = 1500;
+
+    /**
+     * De-duplication window for the block screen. This is NOT a cooldown that
+     * lets an app through: enforcement (leaving the blocked app) always runs,
+     * this only stops us from stacking identical block activities when Android
+     * emits several window events for the same launch.
+     */
+    private static final long BLOCK_SCREEN_DEDUPE_MS = 700;
+    private final java.util.HashMap<String, Long> lastBlockScreenAt = new java.util.HashMap<>();
+
+    /** True when a fresh block screen should be shown for this package now. */
+    private boolean allowBlockScreen(String pkg) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        Long prev = lastBlockScreenAt.get(pkg);
+        if (prev != null && now - prev < BLOCK_SCREEN_DEDUPE_MS) return false;
+        lastBlockScreenAt.put(pkg, now);
+        return true;
+    }
+
+    /** Immediately leaves the blocked app so its content is never usable. */
+    private void leaveBlockedApp() {
+        try { performGlobalAction(GLOBAL_ACTION_BACK); } catch (Throwable ignored) {}
+    }
 
     private Set<String> adultKeywordsSet = new HashSet<>();
     private Set<String> adultSitesList   = new HashSet<>();
@@ -211,7 +233,8 @@ public class ShieldAccessibilityService extends AccessibilityService {
 
         int type = event.getEventType();
 
-        // Night to Rise
+        // Sleep to Rise (internally "night to rise") — enforced on EVERY
+        // foreground event, never one-shot, so Recents / relaunch can't bypass it.
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             try {
                 com.mylifeos.app.nighttorise.NightToRiseManager n2r =
@@ -219,13 +242,21 @@ public class ShieldAccessibilityService extends AccessibilityService {
                 com.mylifeos.app.nighttorise.NightToRiseManager.Decision d =
                     n2r.decide(System.currentTimeMillis(), packageName);
                 if (d.shouldBlock) {
-                    Intent i = new Intent(this,
-                        com.mylifeos.app.nighttorise.NightToRiseBlockActivity.class);
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                    i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_MESSAGE, d.message);
-                    i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_END_MS, d.endTimeMs);
-                    i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_STRICT, n2r.prefs().strictMode());
-                    startActivity(i);
+                    leaveBlockedApp();
+                    if (allowBlockScreen(packageName)) {
+                        n2r.prefs().recordBlockedAttempt(
+                            packageName,
+                            d.phase == com.mylifeos.app.nighttorise.NightToRiseManager.Phase.RISE_LOCK
+                                ? "rise" : "sleep");
+                        Intent i = new Intent(this,
+                            com.mylifeos.app.nighttorise.NightToRiseBlockActivity.class);
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_MESSAGE, d.message);
+                        i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_END_MS, d.endTimeMs);
+                        i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_STRICT, n2r.prefs().strictMode());
+                        i.putExtra(com.mylifeos.app.nighttorise.NightToRiseBlockActivity.EXTRA_PACKAGE, packageName);
+                        startActivity(i);
+                    }
                     return;
                 }
                 // Lock window is over — drop any pending strict-unlock request.
@@ -272,14 +303,16 @@ public class ShieldAccessibilityService extends AccessibilityService {
 
             Set<String> blockedApps = preferences.getBlockedApps();
             if (blockedApps != null && blockedApps.contains(packageName)) {
-                if (!packageName.equals(lastBlockedPackage)) {
-                    lastBlockedPackage = packageName;
+                // Repeat-safe: re-block on EVERY foreground event (relaunch,
+                // Recents, split-screen return). The short throttle below only
+                // prevents duplicate screens from a burst of events for the
+                // same package — it never disables enforcement.
+                leaveBlockedApp();
+                if (allowBlockScreen(packageName)) {
                     preferences.incrementBlockedAttempts();
                     showBlockScreen(packageName, false);
                 }
                 return;
-            } else {
-                lastBlockedPackage = "";
             }
 
             // ==========================================

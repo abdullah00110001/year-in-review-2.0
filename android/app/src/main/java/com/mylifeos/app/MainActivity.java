@@ -20,11 +20,27 @@ import com.mylifeos.app.plugins.BarcodeScannerPlugin;
 import com.mylifeos.app.plugins.NativeRingtonePickerPlugin;
 
 import com.mylifeos.app.plugins.AppUpdatePlugin;
+import com.mylifeos.app.plugins.PhotoPickerPlugin;
 public class MainActivity extends BridgeActivity {
   private static MainActivity instance;
 
+  /** True when this launch is an alarm ring launch (deep link or extra). */
+  private static boolean isAlarmLaunch(Intent intent) {
+    if (intent == null) return false;
+    if (intent.getBooleanExtra("RISE_ALARM_RING", false)) return true;
+    if (intent.hasExtra("ALARM_ID")) return true;
+    Uri d = intent.getData();
+    return d != null && d.toString().contains("/rise/ring/");
+  }
+
   @Override
   public void onCreate(Bundle savedInstanceState) {
+    // 🌑 Remove the white alarm page: swap in the opaque dark/warm alarm theme
+    // BEFORE the window is created so no white splash is ever drawn.
+    boolean alarmLaunch = isAlarmLaunch(getIntent());
+    if (alarmLaunch) {
+      try { setTheme(R.style.AppTheme_AlarmLaunch); } catch (Throwable ignored) {}
+    }
     // Register plugins defensively — one failure must not crash the whole app
     try { registerPlugin(ShieldPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "ShieldPlugin register failed", t); }
     try { registerPlugin(RiseAlarmPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "RiseAlarmPlugin register failed", t); }
@@ -32,11 +48,23 @@ public class MainActivity extends BridgeActivity {
     try { registerPlugin(BarcodeScannerPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "BarcodeScannerPlugin register failed", t); }
     try { registerPlugin(NativeRingtonePickerPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "NativeRingtonePickerPlugin register failed", t); }
     try { registerPlugin(com.mylifeos.app.nighttorise.NightToRisePlugin.class); } catch (Throwable t) { Log.e("MainActivity", "NightToRisePlugin register failed", t); }
+    try { registerPlugin(PhotoPickerPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "PhotoPickerPlugin register failed", t); }
     try { registerPlugin(AppUpdatePlugin.class); } catch (Throwable t) { Log.e("MainActivity", "AppUpdatePlugin register failed", t); }
     super.onCreate(savedInstanceState);
     instance = this;
     // 🔔 Create FCM wake-up notification channel before push payload arrives
     try { ensureWakeUpChannel(); } catch (Throwable t) { Log.e("MainActivity", "ensureWakeUpChannel failed", t); }
+    // Keep the WebView loading surface opaque and matching the ring screen
+    // until React paints, instead of the default white page background.
+    if (alarmLaunch) {
+      try {
+        int bg = 0xFF120C10;
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(bg));
+        if (getBridge() != null && getBridge().getWebView() != null) {
+          getBridge().getWebView().setBackgroundColor(bg);
+        }
+      } catch (Throwable t) { Log.e("MainActivity", "alarm surface tint failed", t); }
+    }
     // 🔥 Handle first launch intent
     try { handleAlarmIntent(getIntent()); } catch (Throwable t) { Log.e("MainActivity", "handleAlarmIntent failed", t); }
   }

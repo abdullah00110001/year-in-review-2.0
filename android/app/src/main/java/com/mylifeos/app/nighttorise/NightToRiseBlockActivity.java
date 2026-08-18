@@ -12,31 +12,46 @@ import com.mylifeos.app.R;
 
 /**
  * NightToRiseBlockActivity — full-screen lock shown by the accessibility
- * service when the user opens a disallowed app inside a Night-to-Rise window.
+ * service when the user opens a disallowed app inside a Sleep-to-Rise window.
  *
  * Intent extras:
  *   "message" : String
  *   "endMs"   : long
  *   "strict"  : boolean
+ *   "package" : String  (the blocked app, re-checked on resume)
  *
- * FIX (v2): tapping "Emergency unlock" now writes a pending-break flag to
- * NightToRisePreferences so the JS layer can pick it up next time it resumes
- * and correctly reset the streak (previously this was silently lost).
+ * Repeat-safe: the screen re-evaluates the lock on every resume, so returning
+ * to the blocked app through Recents or relaunching it cannot bypass it. The
+ * screen only closes itself when the window has genuinely ended.
+ *
+ * Tapping "Emergency unlock" writes a pending-break flag to
+ * NightToRisePreferences so the JS layer picks it up on resume and resets the
+ * streak.
  */
 public class NightToRiseBlockActivity extends Activity {
 
     public static final String EXTRA_MESSAGE = "message";
     public static final String EXTRA_END_MS  = "endMs";
     public static final String EXTRA_STRICT  = "strict";
+    public static final String EXTRA_PACKAGE = "package";
 
     private CountDownTimer timer;
     private CountDownTimer strictTimer;
+    private String blockedPackage;
+    private boolean broke = false;
 
     /** Records the break for JS streak sync and sends the user home. */
     private void breakLock(NightToRisePreferences prefs) {
+        broke = true;
         prefs.recordPendingBreak();
         prefs.clearStrictUnlockRequest();
-        startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        goHome();
+    }
+
+    private void goHome() {
+        startActivity(new Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_HOME)
+            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         finish();
     }
 
@@ -70,10 +85,22 @@ public class NightToRiseBlockActivity extends Activity {
         );
 
         setContentView(R.layout.activity_night_to_rise_block);
+        bind(getIntent());
+    }
 
-        String message = getIntent().getStringExtra(EXTRA_MESSAGE);
-        long   endMs   = getIntent().getLongExtra(EXTRA_END_MS, 0L);
-        boolean strict = getIntent().getBooleanExtra(EXTRA_STRICT, false);
+    /** The service reuses this singleTask activity for every new block event. */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        bind(intent);
+    }
+
+    private void bind(Intent intent) {
+        String message = intent != null ? intent.getStringExtra(EXTRA_MESSAGE) : null;
+        long   endMs   = intent != null ? intent.getLongExtra(EXTRA_END_MS, 0L) : 0L;
+        boolean strict = intent != null && intent.getBooleanExtra(EXTRA_STRICT, false);
+        blockedPackage = intent != null ? intent.getStringExtra(EXTRA_PACKAGE) : null;
 
         ((TextView) findViewById(R.id.n2r_message)).setText(message != null ? message : "Locked.");
 
@@ -81,12 +108,14 @@ public class NightToRiseBlockActivity extends Activity {
         final Button override = findViewById(R.id.n2r_override);
         override.setVisibility(android.view.View.VISIBLE);
 
+        if (strictTimer != null) { strictTimer.cancel(); strictTimer = null; }
+
         if (!strict) {
             override.setText("Emergency unlock");
             override.setOnClickListener(v -> breakLock(prefs));
         } else {
-            // PHASE 2 — strict mode: the override is never hidden (real
-            // emergencies happen), but it costs a 10 minute wait.
+            // Strict mode: the override is never hidden (real emergencies
+            // happen), but it costs a persistent 10 minute wait.
             refreshStrictOverride(prefs, override);
             override.setOnClickListener(v -> {
                 long req = prefs.strictUnlockRequestedAt();
@@ -106,6 +135,7 @@ public class NightToRiseBlockActivity extends Activity {
 
         TextView countdown = findViewById(R.id.n2r_countdown);
         long remaining = Math.max(0, endMs - System.currentTimeMillis());
+        if (timer != null) timer.cancel();
         timer = new CountDownTimer(remaining, 1000) {
             @Override public void onTick(long ms) {
                 long s = ms / 1000;
@@ -116,14 +146,40 @@ public class NightToRiseBlockActivity extends Activity {
             }
             @Override public void onFinish() {
                 countdown.setText("00:00");
-                finish();
+                recheckOrFinish();
             }
         }.start();
 
-        findViewById(R.id.n2r_home).setOnClickListener(v -> {
-            startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            finish();
-        });
+        findViewById(R.id.n2r_home).setOnClickListener(v -> goHome());
+    }
+
+    /**
+     * Re-evaluates the lock. The screen stays up while the window is still
+     * enforcing (so a countdown that ends early — e.g. the alarm moved — does
+     * not silently unlock the phone) and closes once it is genuinely over.
+     */
+    private void recheckOrFinish() {
+        if (broke) { finish(); return; }
+        try {
+            NightToRiseManager mgr = new NightToRiseManager(this);
+            NightToRiseManager.Decision d =
+                mgr.decide(System.currentTimeMillis(), blockedPackage);
+            if (d.shouldBlock) {
+                Intent again = new Intent(getIntent());
+                again.putExtra(EXTRA_MESSAGE, d.message);
+                again.putExtra(EXTRA_END_MS, d.endTimeMs);
+                again.putExtra(EXTRA_STRICT, mgr.prefs().strictMode());
+                bind(again);
+                return;
+            }
+        } catch (Throwable ignored) {}
+        finish();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        recheckOrFinish();
     }
 
     @Override public void onBackPressed() { /* swallow */ }

@@ -196,6 +196,43 @@ public class NightToRisePreferences {
         sp.edit().putLong(K_PENDING_BREAK_TS, System.currentTimeMillis()).apply();
     }
 
+    // ==========================================================
+    // Blocked-attempt counters (drained by JS into night_to_rise_* logs)
+    // ==========================================================
+    private static final String K_ATTEMPTS      = "blockedAttempts";
+    private static final String K_ATTEMPT_PKGS  = "blockedAttemptPackages"; // CSV "pkg|window"
+    private static final int    MAX_ATTEMPT_PKGS = 40;
+
+    /** Records one blocked foreground attempt during a lock window. */
+    public synchronized void recordBlockedAttempt(String pkg, String windowType) {
+        int count = sp.getInt(K_ATTEMPTS, 0) + 1;
+        StringBuilder sb = new StringBuilder(sp.getString(K_ATTEMPT_PKGS, ""));
+        String[] existing = sb.toString().split(",");
+        if (existing.length >= MAX_ATTEMPT_PKGS) {
+            sb = new StringBuilder();
+            for (int i = existing.length - MAX_ATTEMPT_PKGS + 1; i < existing.length; i++) {
+                if (existing[i].trim().isEmpty()) continue;
+                if (sb.length() > 0) sb.append(",");
+                sb.append(existing[i].trim());
+            }
+        }
+        if (pkg != null && !pkg.isEmpty()) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(pkg).append("|").append(windowType == null ? "sleep" : windowType);
+        }
+        sp.edit().putInt(K_ATTEMPTS, count).putString(K_ATTEMPT_PKGS, sb.toString()).apply();
+    }
+
+    public int blockedAttempts() { return sp.getInt(K_ATTEMPTS, 0); }
+
+    /** Returns pending "pkg|window" entries and clears the buffer. */
+    public synchronized String[] drainBlockedAttempts() {
+        String csv = sp.getString(K_ATTEMPT_PKGS, "");
+        sp.edit().putInt(K_ATTEMPTS, 0).remove(K_ATTEMPT_PKGS).apply();
+        if (csv.isEmpty()) return new String[0];
+        return csv.split(",");
+    }
+
     /**
      * Called by NightToRisePlugin.consumePendingBreak() when JS resumes.
      * Returns true (and clears the flag) exactly once per break event.

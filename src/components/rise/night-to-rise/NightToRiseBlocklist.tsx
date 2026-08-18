@@ -4,7 +4,7 @@
  * suggested list (or add custom ones), and block distracting sites/keywords.
  */
 import { useState } from 'react';
-import { Ban, Plus, X, Globe, Search, ShieldAlert } from 'lucide-react';
+import { Ban, Plus, X, Globe, Search, ShieldAlert, Smartphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,6 +16,7 @@ import {
   SUGGESTED_BLOCK_SITES,
   ALWAYS_ALLOWED_IDS,
 } from './types';
+import { InstalledAppPicker } from './InstalledAppPicker';
 
 interface Props {
   config: NightToRiseConfig;
@@ -27,7 +28,7 @@ function normalizeSite(v: string) {
 }
 
 export function NightToRiseBlocklist({ config, update }: Props) {
-  const [customApp, setCustomApp] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [customSite, setCustomSite] = useState('');
   const [customKeyword, setCustomKeyword] = useState('');
 
@@ -42,13 +43,14 @@ export function NightToRiseBlocklist({ config, update }: Props) {
     });
   };
 
-  const addCustomApp = () => {
-    const name = customApp.trim();
-    if (!name) return;
-    const id = name.toLowerCase().replace(/\s+/g, '.');
-    if (ALWAYS_ALLOWED_IDS.includes(id) || isBlocked(id)) { setCustomApp(''); return; }
-    update({ blockedApps: [...config.blockedApps, { id, name }] });
-    setCustomApp('');
+  /**
+   * Saves real package names coming from the device app list. Typing a name by
+   * hand used to create fake ids like "telegram" that native enforcement could
+   * never match, so the picker is now the only way to add apps.
+   */
+  const saveFromPicker = (apps: AllowedApp[]) => {
+    update({ blockedApps: apps.filter((a) => !ALWAYS_ALLOWED_IDS.includes(a.id)) });
+    setPickerOpen(false);
   };
 
   const addSite = (raw: string) => {
@@ -130,15 +132,23 @@ export function NightToRiseBlocklist({ config, update }: Props) {
           </div>
         )}
 
-        <div className="mt-3 flex gap-2">
-          <Input
-            placeholder="Add app (e.g. Telegram)"
-            value={customApp}
-            onChange={(e) => setCustomApp(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addCustomApp()}
-          />
-          <Button size="icon" onClick={addCustomApp}><Plus className="h-4 w-4" /></Button>
+        <div className="mt-3">
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setPickerOpen(true)}>
+            <Smartphone className="h-3.5 w-3.5" /> Choose from installed apps
+          </Button>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Apps are matched by their real package name so blocking works on the device.
+          </p>
         </div>
+
+        <InstalledAppPicker
+          open={pickerOpen}
+          title="Block apps"
+          selected={config.blockedApps.map((a) => a.id)}
+          lockedIds={[]}
+          onClose={() => setPickerOpen(false)}
+          onSave={saveFromPicker}
+        />
       </div>
 
       {/* Blocked sites */}
@@ -195,7 +205,7 @@ export function NightToRiseBlocklist({ config, update }: Props) {
         {config.blockedKeywords.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {config.blockedKeywords.map((k) => (
-              <span key={k} className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+              <span key={k} className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 px-3 py-1.5 text-xs font-medium text-warning">
                 {k}
                 <button
                   onClick={() => update({ blockedKeywords: config.blockedKeywords.filter((x) => x !== k) })}

@@ -40,7 +40,6 @@ import { OfflineBadge } from '@/components/OfflineGuard';
 import { useNightToRise } from '@/components/rise/night-to-rise/useNightToRise';
 import { useNightToRiseStreak } from '@/components/rise/night-to-rise/useNightToRiseStreak';
 import { useNightToRiseLogs } from '@/hooks/useNightToRiseLogs';
-import { useTimeTheme } from '@/components/rise/night-to-rise/timeTheme';
 import { NightArc } from '@/components/rise/night-to-rise/NightArc';
 import { NightToRiseBlocklist } from '@/components/rise/night-to-rise/NightToRiseBlocklist';
 import { NightToRiseInsights } from '@/components/rise/night-to-rise/NightToRiseInsights';
@@ -91,7 +90,6 @@ export default function NightToRisePage() {
   const { streak: serverStreak, protectedNights, successRate, averageSleepMinutes } = useNightToRiseLogs();
   const streak = Math.max(serverStreak, localStreak);
 
-  const { theme, style } = useTimeTheme(isLockEnforcing);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -155,7 +153,7 @@ export default function NightToRisePage() {
 
   return (
     <AppLayout hideMobileHeader>
-      <div className="n2r min-h-screen pb-28" data-phase={status.phase} style={style}>
+      <div className="n2r min-h-screen pb-28" data-phase={status.phase}>
         {/* ---------------------------- Header ---------------------------- */}
         <div className="px-4 pt-4">
           <div className="flex items-center justify-between gap-3">
@@ -170,7 +168,7 @@ export default function NightToRisePage() {
               </button>
               <div className="min-w-0">
                 <h1 className="truncate text-xl font-bold">Sleep to Rise</h1>
-                <p className="text-xs text-muted-foreground">{theme.label} · protecting your night and morning</p>
+                <p className="text-xs text-muted-foreground">Protecting your night and morning</p>
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -214,7 +212,7 @@ export default function NightToRisePage() {
                 <div className="shrink-0 text-right">
                   <p className="n2r-display text-4xl leading-none n2r-accent-text">{streak}</p>
                   <p className="mt-1 flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
-                    <Flame className="n2r-flame h-3 w-3 text-warning" /> night streak
+                    <Flame className="h-3 w-3 text-warning" /> night streak
                   </p>
                 </div>
               </div>
@@ -269,16 +267,13 @@ export default function NightToRisePage() {
           )}
 
           {/* ----------------------------- Tabs ----------------------------- */}
-          <Tabs defaultValue="setup" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="setup" className="gap-1.5 text-xs">
-                <Settings2 className="h-3.5 w-3.5" /> Setup
-              </TabsTrigger>
-              <TabsTrigger value="blocking" className="gap-1.5 text-xs">
-                <Ban className="h-3.5 w-3.5" /> Blocking
-              </TabsTrigger>
+          <Tabs defaultValue="insights" className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="insights" className="gap-1.5 text-xs">
                 <BarChart3 className="h-3.5 w-3.5" /> Insights
+              </TabsTrigger>
+              <TabsTrigger value="setup" className="gap-1.5 text-xs">
+                <Settings2 className="h-3.5 w-3.5" /> Setup
               </TabsTrigger>
             </TabsList>
 
@@ -342,6 +337,12 @@ export default function NightToRisePage() {
                     />
                   </div>
                 </div>
+              </Section>
+
+              <GroupLabel>Blocking</GroupLabel>
+
+              <Section icon={<Ban className="h-4 w-4" />} title="Blocked Apps" subtitle="Locked during the sleep & rise windows">
+                <NightToRiseBlocklist config={config} update={update} />
               </Section>
 
               <Section icon={<Smartphone className="h-4 w-4" />} title="Allowed Apps" subtitle="These stay open during locked windows">
@@ -478,13 +479,6 @@ export default function NightToRisePage() {
                     </Button>
                   </div>
                 </div>
-              </Section>
-            </TabsContent>
-
-            {/* =========================== BLOCKING =========================== */}
-            <TabsContent value="blocking" className="mt-4 space-y-4">
-              <Section icon={<Ban className="h-4 w-4" />} title="Blocklist" subtitle="Apps, sites & keywords locked during windows">
-                <NightToRiseBlocklist config={config} update={update} />
               </Section>
             </TabsContent>
 
