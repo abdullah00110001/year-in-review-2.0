@@ -84,10 +84,11 @@ public final class NightToRiseDecider {
         }
     }
 
-    /** True when the package must never be locked, whatever the mode is. */
+    /** True when the package must never be locked, whatever the config says. */
     public static boolean isSafePackage(Config cfg, String pkg) {
         if (pkg == null || pkg.isEmpty()) return true;
         if (cfg.selfPackage != null && pkg.equals(cfg.selfPackage)) return true;
+        if (cfg.extraSafePackages != null && cfg.extraSafePackages.contains(pkg)) return true;
         for (String s : SAFE_EXACT) if (s.equals(pkg)) return true;
         String lower = pkg.toLowerCase();
         for (String s : SAFE_CONTAINS) if (lower.contains(s)) return true;
@@ -98,19 +99,16 @@ public final class NightToRiseDecider {
         if (cfg == null || !cfg.enabled) return new Decision(Phase.OFF, false, 0, "");
         if (cfg.pausedUntilMs > nowMs)   return new Decision(Phase.PAUSED, false, cfg.pausedUntilMs, "");
 
-        // ---- Safety exemptions come first, before any mode logic ----
+        // ---- Safety exemptions come first ----
         if (isSafePackage(cfg, foregroundPackage)) return new Decision(Phase.ARMED, false, 0, "");
-        if (foregroundPackage != null && cfg.allowedPackages.contains(foregroundPackage)) {
+
+        // ---- ALLOWLIST ONLY: anything not explicitly allowed is locked ----
+        if (foregroundPackage != null
+            && cfg.allowedPackages != null
+            && cfg.allowedPackages.contains(foregroundPackage)) {
             return new Decision(Phase.ARMED, false, 0, "");
         }
 
-        // Blocklist mode: only the apps the user explicitly picked are locked.
-        // Allowlist mode: everything that is not allowed (and not safe) locks.
-        if ("blocklist".equals(cfg.blocklistMode)) {
-            if (foregroundPackage == null || !cfg.blockedPackages.contains(foregroundPackage)) {
-                return new Decision(Phase.ARMED, false, 0, "");
-            }
-        }
 
         // ---- Sleep-start time (today or yesterday, whichever is most recent) ----
         int sleepStartMin = sleepStartMinuteOfDay(cfg);
