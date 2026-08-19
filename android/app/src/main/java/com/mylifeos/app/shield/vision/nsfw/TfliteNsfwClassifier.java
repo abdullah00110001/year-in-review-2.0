@@ -190,5 +190,4 @@ public class TfliteNsfwClassifier implements NsfwClassifier {
     private float sigmoidIfNeeded(float raw) {
         if (raw >= 0f && raw <= 1f) return raw; // already a probability
         return 1f / (1f + (float) Math.exp(-raw));
-    }
-}
+    }mainLayout

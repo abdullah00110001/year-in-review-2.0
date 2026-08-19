@@ -40,7 +40,6 @@ import { OfflineBadge } from '@/components/OfflineGuard';
 import { useNightToRise } from '@/components/rise/night-to-rise/useNightToRise';
 import { useNightToRiseStreak } from '@/components/rise/night-to-rise/useNightToRiseStreak';
 import { useNightToRiseLogs } from '@/hooks/useNightToRiseLogs';
-import { useAllowedAppsSync } from '@/hooks/useAllowedAppsSync';
 import { NightArc } from '@/components/rise/night-to-rise/NightArc';
 import { NightToRiseInsights } from '@/components/rise/night-to-rise/NightToRiseInsights';
 import { InstalledAppPicker } from '@/components/rise/night-to-rise/InstalledAppPicker';
@@ -86,7 +85,6 @@ export default function NightToRisePage() {
     requestEmergencyUnlock, emergencyUnlockMsLeft,
   } = useNightToRise(riseAlarmTime);
 
-  useAllowedAppsSync(config.allowedApps, (apps) => update({ allowedApps: apps }));
 
   const { streak: localStreak } = useNightToRiseStreak();
   const { streak: serverStreak, protectedNights, successRate, averageSleepMinutes } = useNightToRiseLogs();

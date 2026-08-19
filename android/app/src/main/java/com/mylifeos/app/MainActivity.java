@@ -10,6 +10,8 @@ import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
@@ -18,11 +20,61 @@ import com.mylifeos.app.plugins.ShieldPlugin;
 import com.mylifeos.app.plugins.RiseAlarmPlugin;
 import com.mylifeos.app.plugins.BarcodeScannerPlugin;
 import com.mylifeos.app.plugins.NativeRingtonePickerPlugin;
+import com.mylifeos.app.rise.state.AlarmStateManager;
 
 import com.mylifeos.app.plugins.AppUpdatePlugin;
 import com.mylifeos.app.plugins.PhotoPickerPlugin;
 public class MainActivity extends BridgeActivity {
   private static MainActivity instance;
+
+  // ──────────────────────────────────────────
+  // Rise mission anti-escape watchdog
+  // ──────────────────────────────────────────
+  // FIX: This used to live in RiseRingActivity's onPause(), but that fired on
+  // EVERY pause — including the pause RiseRingActivity itself caused by
+  // handing off to MainActivity — so it kept resetting the in-progress
+  // mission every ~5s (React ring screen remounted, solvedCount lost).
+  //
+  // onUserLeaveHint() is the correct signal here: Android calls it ONLY when
+  // the user explicitly presses Home / Recents / a similar "leave the app"
+  // gesture — never as a side effect of our own startActivity() calls. So
+  // this can't be falsely triggered by internal navigation the way the old
+  // onPause()-based check could.
+  //
+  // The re-bring intent below carries no deep-link data/extras, so
+  // handleAlarmIntent() below is a no-op for it and the React router never
+  // re-navigates — the existing WebView (and its in-progress mission state)
+  // is just brought back to the front untouched.
+  private final Handler reBringHandler = new Handler(Looper.getMainLooper());
+  private Runnable reBringRunnable;
+  private static final long RE_BRING_DELAY_MS = 3000;
+
+  @Override
+  public void onUserLeaveHint() {
+    super.onUserLeaveHint();
+    if (!AlarmStateManager.isRinging(this)) return; // no mission in progress — let the user leave normally
+
+    if (reBringRunnable != null) reBringHandler.removeCallbacks(reBringRunnable);
+    reBringRunnable = () -> {
+      if (!AlarmStateManager.isRinging(this)) return; // mission finished in the meantime — don't re-bring
+      Log.d("MainActivity", "User tried to leave during an active Rise mission — re-bringing");
+      try {
+        Intent bring = new Intent(this, MainActivity.class);
+        bring.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(bring);
+      } catch (Throwable t) {
+        Log.e("MainActivity", "re-bring failed", t);
+      }
+    };
+    reBringHandler.postDelayed(reBringRunnable, RE_BRING_DELAY_MS);
+  }
+
+  private void cancelReBring() {
+    if (reBringRunnable != null) {
+      reBringHandler.removeCallbacks(reBringRunnable);
+      reBringRunnable = null;
+    }
+  }
 
   /** True when this launch is an alarm ring launch (deep link or extra). */
   private static boolean isAlarmLaunch(Intent intent) {
@@ -125,6 +177,9 @@ public class MainActivity extends BridgeActivity {
       prefs.edit().putString("ringing_alarm_id", alarmId).apply();
       Log.d("RiseAlarm", "Alarm via extra ID: " + alarmId);
     }
+    // NOTE: our own re-bring intent (see onUserLeaveHint above) has neither
+    // a "capacitor" scheme nor an ALARM_ID extra, so it falls through here
+    // as a no-op — no navigation, no React state reset.
   }
 
   private void enableLockScreenTakeover() {
@@ -160,5 +215,18 @@ public class MainActivity extends BridgeActivity {
         );
       });
     }
+  }
+
+  @Override
+  protected void onResume() {
+    super.onResume();
+    // Mission finished (or user genuinely came back) — no need to re-bring anymore.
+    cancelReBring();
+  }
+
+  @Override
+  protected void onDestroy() {
+    cancelReBring();
+    super.onDestroy();
   }
 }
