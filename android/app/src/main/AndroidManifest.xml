@@ -144,6 +144,17 @@
             android:foregroundServiceType="mediaPlayback"
             android:stopWithTask="false" />
 
+        <!-- Sleep to Rise — real enforcement + status notification -->
+        <service
+            android:name=".nighttorise.ForegroundGuardService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="sleep_to_rise_enforcement" />
+        </service>
+
         <!-- ================================================
         🔁 BOOT RECEIVER
         ================================================ -->

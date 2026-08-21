@@ -1,11 +1,23 @@
 /**
  * NightToRiseGuard — global full-screen overlay shown whenever the Night-to-Rise
- * lock window is active. Mounted once at the App root. Reads config from
- * localStorage via useNightToRise and the next rise alarm from local_alarms.
+ * lock window is active. Mounted once at the App root.
  *
- * PHASE 2: Strict mode is now fully enforced — instead of hiding the override,
- * it puts the emergency unlock behind a 10 minute cool-down, so a sleepy tap
- * can never break the night, but a real emergency is never locked out.
+ * FIX: this used to compute `phase`/`endTime` purely in JS from localStorage
+ * (useNightToRise -> computeNightWindows, reading local_alarms), completely
+ * decoupled from the native decider that actually drives the block screen
+ * shown over OTHER apps (NightToRiseManager/Decider, fed from a different
+ * alarm source — RiseAlarmStore via riseAlarmMs()). That meant this overlay
+ * could show "Rest now" purely because its own clock math thought it was
+ * sleep time, while the native side — the only thing that can actually block
+ * a third-party app — disagreed (or vice versa: native could be enforcing
+ * with zero visible indication in-app).
+ *
+ * Now this polls nightToRiseBridge.getStatus() (real native truth) as the
+ * primary source of phase/endTimeMs. The old local computation is kept ONLY
+ * as a fallback for web/iOS (where there is no native enforcement to ask) or
+ * if the native call fails for some reason — so behavior never gets worse
+ * than before, but on Android with the plugin available, this overlay now
+ * can never show a lock state that native enforcement isn't also applying.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -14,7 +26,7 @@ import { Lock, Smartphone, ShieldOff, Flame, Sparkles, Hourglass } from 'lucide-
 import { Button } from '@/components/ui/button';
 import { useNightToRise } from './useNightToRise';
 import { useNightToRiseStreak } from './useNightToRiseStreak';
-import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
+import { nightToRiseBridge, type NativeLockStatus } from '@/lib/capacitor/nightToRiseBridge';
 import { STRICT_UNLOCK_DELAY_MS } from './types';
 import { cn } from '@/lib/utils';
 
@@ -28,13 +40,27 @@ function readNextAlarmTime(): string | null {
   } catch { return null; }
 }
 
+/** Native phase ('SLEEP_LOCK') -> the local phase strings this component already uses ('sleep-lock'). */
+function mapNativePhase(p: NativeLockStatus['phase']): 'off' | 'armed' | 'sleep-lock' | 'rise-lock' | 'paused' | 'inactive-day' {
+  switch (p) {
+    case 'SLEEP_LOCK': return 'sleep-lock';
+    case 'RISE_LOCK': return 'rise-lock';
+    case 'PAUSED': return 'paused';
+    case 'INACTIVE_DAY': return 'inactive-day';
+    case 'ARMED': return 'armed';
+    default: return 'off';
+  }
+}
+
 const EXEMPT_ROUTES = ['/rise/ring', '/auth', '/reset-password'];
 const STRICT_REQUEST_KEY = 'night_to_rise_strict_request_at';
+/** How often to re-check real native enforcement state. */
+const STATUS_POLL_MS = 3000;
 
 export function NightToRiseGuard() {
   const { pathname } = useLocation();
   const [alarmTime, setAlarmTime] = useState<string | null>(readNextAlarmTime);
-  const { config, status } = useNightToRise(alarmTime);
+  const { config, status: localStatus } = useNightToRise(alarmTime);
   const { streak, recordBreak, recordCleanNight } = useNightToRiseStreak();
   const [now, setNow] = useState(new Date());
   const [overridden, setOverridden] = useState(false);
@@ -45,6 +71,30 @@ export function NightToRiseGuard() {
     const n = raw ? Number(raw) : 0;
     return n > 0 ? n : null;
   });
+
+  // ---- NEW: real native status, polled ----
+  const [nativeStatus, setNativeStatus] = useState<NativeLockStatus | null>(null);
+  const [nativeStatusTried, setNativeStatusTried] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const s = await nightToRiseBridge.getStatus();
+        if (!cancelled) {
+          setNativeStatus(s);
+          setNativeStatusTried(true);
+        }
+      } catch {
+        if (!cancelled) setNativeStatusTried(true);
+      }
+    };
+    void poll();
+    const t = setInterval(poll, STATUS_POLL_MS);
+    const onVisible = () => { if (document.visibilityState === 'visible') void poll(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { cancelled = true; clearInterval(t); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -75,7 +125,14 @@ export function NightToRiseGuard() {
   }, [recordBreak]);
 
   const isExempt = EXEMPT_ROUTES.some((r) => pathname.startsWith(r));
-  const phase = status.phase;
+
+  // ---- FIX: prefer native truth over the local JS computation ----
+  // If we have a native status reading (Android, plugin call succeeded),
+  // use it. Otherwise (web/iOS, or the native call hasn't resolved / failed)
+  // fall back to the old local computation so nothing regresses there.
+  const useNative = nativeStatus !== null;
+  const phase = useNative ? mapNativePhase(nativeStatus!.phase) : localStatus.phase;
+
   const isLocked = (phase === 'sleep-lock' || phase === 'rise-lock') && !isExempt && !overridden;
 
   // When phase transitions off after a lock, record a clean night.
@@ -98,7 +155,16 @@ export function NightToRiseGuard() {
 
   const message = phase === 'sleep-lock' ? config.sleepBlockMessage : config.riseBlockMessage;
 
+  // ---- FIX: endTime comes straight from native when available, instead of
+  // being independently recomputed here (which was the other half of the
+  // desync — this component used to guess the sleep window's end from
+  // sleepTime + a hardcoded 30 min, ignoring the user's actual configured
+  // sleepLockMinutesBefore/riseLockMinutesAfter that native uses). ----
   const endTime = useMemo(() => {
+    if (useNative && nativeStatus!.endTimeMs > 0) {
+      return new Date(nativeStatus!.endTimeMs);
+    }
+    // Fallback: old local estimate (web/iOS or native status unavailable).
     if (phase === 'sleep-lock') {
       const [h, m] = config.sleepTime.split(':').map(Number);
       const end = new Date();
@@ -114,7 +180,7 @@ export function NightToRiseGuard() {
       return end;
     }
     return null;
-  }, [phase, alarmTime, config, now]);
+  }, [useNative, nativeStatus, phase, alarmTime, config, now]);
 
   const remaining = endTime ? Math.max(0, Math.floor((endTime.getTime() - now.getTime()) / 1000)) : 0;
   const hh = Math.floor(remaining / 3600);
@@ -141,7 +207,6 @@ export function NightToRiseGuard() {
 
   const handleEmergencyUnlock = () => {
     if (!canOverrideNow) return;
-    // PIN: stored at 'app_lock_pin'; fall back to allowing override without PIN
     let storedPin: string | null = null;
     try { storedPin = localStorage.getItem('app_lock_pin'); } catch { /* noop */ }
     if (storedPin && pinInput !== storedPin) return;
@@ -150,6 +215,12 @@ export function NightToRiseGuard() {
     try { localStorage.removeItem(STRICT_REQUEST_KEY); } catch { /* noop */ }
   };
 
+  // Don't flash a stale local-computed lock screen before the first native
+  // status reply arrives on Android — wait one tick, then fall back if it
+  // never arrives (e.g. web/iOS, where nativeStatusTried stays true but
+  // nativeStatus stays null forever, which correctly routes to the local
+  // fallback above).
+  if (!nativeStatusTried) return null;
   if (!isLocked) return null;
 
   const dawn = phase === 'rise-lock';
