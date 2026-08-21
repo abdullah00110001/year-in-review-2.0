@@ -58,6 +58,38 @@ public class ForegroundGuardService extends Service {
     private String lastBlockedFor = null;
     private long lastBlockScreenAt = 0L;
     private String lastNotifText = null;
+    private long tickCount = 0L;
+
+    // ---- File-based debug log (no PC/adb needed — view via any file manager) ----
+    // Path: Android/data/com.mylifeosv2.app/files/n2r_debug.log (app's own external
+    // files dir — always writable without any extra permission).
+    private java.io.File logFile;
+    private static final long LOG_MAX_BYTES = 300_000L; // trim when it grows past this
+
+    private void log(String line) {
+        try {
+            if (logFile == null) {
+                java.io.File dir = getExternalFilesDir(null);
+                if (dir == null) dir = getFilesDir();
+                logFile = new java.io.File(dir, "n2r_debug.log");
+            }
+            String ts = new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date());
+            String entry = ts + "  " + line + "\n";
+            if (logFile.exists() && logFile.length() > LOG_MAX_BYTES) {
+                // keep only the last half, so the file never grows forever
+                byte[] all = java.nio.file.Files.readAllBytes(logFile.toPath());
+                int keepFrom = all.length / 2;
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile, false);
+                fos.write(all, keepFrom, all.length - keepFrom);
+                fos.close();
+            }
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile, true);
+            fos.write(entry.getBytes());
+            fos.close();
+        } catch (Throwable t) {
+            Log.w(TAG, "debug log write failed", t);
+        }
+    }
 
     public static void start(Context ctx) {
         try {
@@ -87,6 +119,8 @@ public class ForegroundGuardService extends Service {
         prefs = manager.prefs();
         ensureChannel();
         startForeground(NOTIF_ID, buildNotification("Sleep to Rise", "Watching…", false));
+        log("=== SERVICE CREATED === enabled=" + prefs.isEnabled()
+            + " allowedApps=" + prefs.allowedPackages());
         handler = new Handler(Looper.getMainLooper());
         pollRunnable = this::tick;
         handler.post(pollRunnable);
@@ -102,43 +136,83 @@ public class ForegroundGuardService extends Service {
 
     @Override
     public void onDestroy() {
+        log("=== SERVICE DESTROYED === (this shouldn't happen while enabled=true — "
+            + "if you see this without you turning it off, the OS/OEM is killing the service)");
         if (handler != null && pollRunnable != null) handler.removeCallbacks(pollRunnable);
         super.onDestroy();
     }
 
     private void tick() {
+        tickCount++;
         try {
             if (!prefs.isEnabled()) {
                 updateNotification("Sleep to Rise", "Turned off", false);
+                if (tickCount % 10 == 1) log("tick#" + tickCount + " enabled=false -> stopping service");
                 stopSelf();
                 return;
             }
 
-            String fg = queryForegroundPackage();
-            NightToRiseManager.Decision d =
-                manager.decide(System.currentTimeMillis(), fg != null ? fg : "__n2r_probe__");
+            long now = System.currentTimeMillis();
 
-            // ---- Notification: always reflects the REAL decision, not a guess ----
-            if (d.shouldBlock) {
-                String label = d.phase == NightToRiseManager.Phase.RISE_LOCK ? "Rise Guard" : "Sleep Guard";
-                long remMin = Math.max(0, (d.endTimeMs - System.currentTimeMillis()) / 60000);
-                updateNotification(label + " active", "Locked \u2022 " + remMin + " min left", true);
+            // FIX: these are two DIFFERENT questions and must use two separate
+            // decide() calls:
+            //   (window) "is the sleep/rise window active AT ALL right now?"
+            //            — must use a neutral probe package so it can never be
+            //            skewed by whichever app happens to be foreground
+            //            (e.g. LifeOS itself, which is always self-exempt and
+            //            would otherwise make this incorrectly report "not
+            //            locking" whenever the user has LifeOS open).
+            //   (fg)     "should THIS SPECIFIC foreground app be blocked?"
+            //            — must use the real foreground package so self/
+            //            allowlisted apps are correctly left alone.
+            // The notification must always be driven by `window`, never by `fgDecision`.
+            NightToRiseManager.Decision window =
+                manager.decide(now, "__n2r_status_probe__");
+
+            String fg = queryForegroundPackage();
+            NightToRiseManager.Decision fgDecision =
+                manager.decide(now, fg != null ? fg : "__n2r_probe__");
+
+            // Log EVERY tick in full detail — this is the main diagnostic tool
+            // since there's no adb/logcat access. File: n2r_debug.log
+            log("tick#" + tickCount
+                + " window.phase=" + window.phase + " window.shouldBlock=" + window.shouldBlock
+                + " endInMin=" + Math.max(0, (window.endTimeMs - now) / 60000)
+                + " | fg=" + fg
+                + " | fgDecision.shouldBlock=" + fgDecision.shouldBlock
+                + " isSelf=" + (fg != null && isSelf(fg))
+                + " allowed=" + prefs.allowedPackages());
+
+            // ---- Notification: always reflects whether the WINDOW is active,
+            // PLUS a live diagnostic line so we can see, without logcat, exactly
+            // what this service currently detects. ----
+            String fgLabel = (fg != null) ? fg : "unknown (Usage Access not reporting)";
+            if (window.shouldBlock) {
+                String label = window.phase == NightToRiseManager.Phase.RISE_LOCK ? "Rise Guard" : "Sleep Guard";
+                long remMin = Math.max(0, (window.endTimeMs - now) / 60000);
+                updateNotification(label + " active \u2022 " + remMin + "m left",
+                    "Seeing: " + fgLabel, true);
             } else {
-                updateNotification("Sleep to Rise", "Not currently locking", false);
+                updateNotification("Sleep to Rise \u2022 not locking",
+                    "Seeing: " + fgLabel, false);
             }
 
             // ---- Enforcement: block the real foreground app if needed ----
+            NightToRiseManager.Decision d = fgDecision;
             if (d.shouldBlock && fg != null && !isSelf(fg)) {
-                long now = System.currentTimeMillis();
                 boolean sameAppRecently = fg.equals(lastBlockedFor) && (now - lastBlockScreenAt) < BLOCK_SCREEN_DEDUPE_MS;
                 if (!sameAppRecently) {
                     lastBlockedFor = fg;
                     lastBlockScreenAt = now;
+                    log("  -> BLOCKING " + fg + " (phase=" + d.phase + ")");
                     prefs.recordBlockedAttempt(fg, d.phase == NightToRiseManager.Phase.RISE_LOCK ? "rise" : "sleep");
                     launchBlockScreen(d, fg);
+                } else {
+                    log("  -> would block " + fg + " but deduped (blocked " + (now - lastBlockScreenAt) + "ms ago)");
                 }
             }
         } catch (Throwable t) {
+            log("tick#" + tickCount + " EXCEPTION: " + t);
             Log.w(TAG, "tick failed", t);
         } finally {
             if (handler != null && pollRunnable != null) handler.postDelayed(pollRunnable, POLL_MS);
@@ -150,6 +224,18 @@ public class ForegroundGuardService extends Service {
     }
 
     private void launchBlockScreen(NightToRiseManager.Decision d, String blockedPackage) {
+        // Diagnostic toast — Toasts generally still show even on ROMs that
+        // restrict background Activity starts, so if you see this toast but
+        // the actual block screen never appears, that confirms the *launch*
+        // itself is being silently blocked (almost certainly MIUI's
+        // "Display pop-up windows while running in background" permission —
+        // a DIFFERENT permission from Usage Access / Accessibility, and not
+        // part of this app's own permission-request screen; you have to grant
+        // it manually per-app in Settings).
+        try {
+            android.widget.Toast.makeText(this, "Sleep to Rise: blocking " + blockedPackage, android.widget.Toast.LENGTH_SHORT).show();
+        } catch (Throwable ignored) {}
+
         Intent i = new Intent(this, NightToRiseBlockActivity.class);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         i.putExtra(NightToRiseBlockActivity.EXTRA_MESSAGE, d.message);
@@ -158,7 +244,11 @@ public class ForegroundGuardService extends Service {
         i.putExtra(NightToRiseBlockActivity.EXTRA_PACKAGE, blockedPackage);
         try {
             startActivity(i);
+            log("  -> startActivity() call completed without throwing for " + blockedPackage
+                + " (if the screen still doesn't appear, MIUI is silently swallowing the launch — "
+                + "check 'Display pop-up windows while running in background' permission)");
         } catch (Throwable t) {
+            log("  -> startActivity() THREW: " + t + " — this IS the block screen failing to launch");
             // Starting an Activity from a background Service can be restricted on some
             // OEM builds (MIUI's "display pop-up window while running in background").
             // Log loudly instead of failing silently, since this is the #1 suspect if

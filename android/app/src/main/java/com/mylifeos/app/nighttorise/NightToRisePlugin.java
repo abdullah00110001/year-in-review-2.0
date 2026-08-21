@@ -31,7 +31,6 @@ public class NightToRisePlugin extends Plugin {
         if (json == null) { call.reject("json required"); return; }
         try {
             new NightToRisePreferences(getContext()).saveJsonConfig(json);
-            ForegroundGuardService.kick(getContext());
             call.resolve();
         } catch (Exception t) {
             call.reject("setConfig failed: " + t.getMessage(), t);
