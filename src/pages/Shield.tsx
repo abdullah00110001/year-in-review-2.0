@@ -20,6 +20,7 @@ import { LifeosGroupsHome } from '@/components/groups/LifeosGroupsHome';
 import { BlockAppsPage } from '@/components/shield/pages/BlockAppsPage';
 import { BlockSitesPage } from '@/components/shield/pages/BlockSitesPage';
 import { BlockKeywordsPage } from '@/components/shield/pages/BlockKeywordsPage';
+import { TelegramGuardPage } from '@/components/shield/pages/TelegramGuardPage';
 import { FloatingTimerSettings } from '@/components/shield/FloatingTimerSettings';
 import { BlockScreenSettingsPage } from '@/components/shield/BlockScreenSettingsPage';
 import { OrbTimerSettingsPage } from '@/components/shield/OrbTimerSettingsPage';
@@ -53,7 +54,7 @@ import {
 
 import type { StrictnessMode } from '@/components/shield/ShieldModes';
 import { normalizeShieldMode } from '@/components/shield/ShieldModes';
-type SubPage = 'main' | 'block-screen' | 'block-apps' | 'block-sites' | 'block-keywords' | 'floating-timer' | 'pure-shield' | 'blocking-db' | 'app-lock' | 'daily-limits';
+type SubPage = 'main' | 'block-screen' | 'block-apps' | 'block-sites' | 'block-keywords' | 'telegram-guard' | 'floating-timer' | 'pure-shield' | 'blocking-db' | 'app-lock' | 'daily-limits';
 
 interface DisciplineProfile {
   id: string;
@@ -373,7 +374,7 @@ export default function ShieldPage() {
   };
 
   const VALID_SUBPAGES: SubPage[] = [
-    'block-screen', 'block-apps', 'block-sites', 'block-keywords',
+    'block-screen', 'block-apps', 'block-sites', 'block-keywords', 'telegram-guard',
     'floating-timer', 'pure-shield', 'blocking-db', 'app-lock', 'daily-limits',
   ];
 
@@ -509,6 +510,7 @@ export default function ShieldPage() {
   if (subPage === 'block-apps') return <BlockAppsPage onBack={() => setSubPage('main')} />;
   if (subPage === 'block-sites') return <BlockSitesPage onBack={() => setSubPage('main')} />;
   if (subPage === 'block-keywords') return <BlockKeywordsPage onBack={() => setSubPage('main')} />;
+  if (subPage === 'telegram-guard') return <TelegramGuardPage onBack={() => setSubPage('main')} />;
   if (subPage === 'blocking-db') return <BlockingDatabasesPage onBack={() => setSubPage('main')} />;
   if (subPage === 'floating-timer') return <OrbTimerSettingsPage onBack={() => setSubPage('main')} />;
   if (subPage === 'app-lock') return <AppLockSettingsPage onBack={() => setSubPage('main')} />;

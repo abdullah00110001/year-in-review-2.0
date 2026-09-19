@@ -10,7 +10,7 @@ import {
   type PauseReason,
 } from './types';
 import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
-import { computeNightWindows, nextOccurrenceMs } from './timeMath';
+import { computeNightWindows, relevantAlarmOccurrenceMs } from './timeMath';
 
 function load(): NightToRiseConfig {
   try {
@@ -84,8 +84,10 @@ export function useNightToRise(riseAlarmTime?: string | null) {
       void nightToRiseBridge.setRiseAlarm(0);
       return;
     }
-    void nightToRiseBridge.setRiseAlarm(nextOccurrenceMs(riseAlarmTime));
-  }, [riseAlarmTime, now]);
+    void nightToRiseBridge.setRiseAlarm(
+      relevantAlarmOccurrenceMs(riseAlarmTime, config.riseLockMinutesAfter, now),
+    );
+  }, [riseAlarmTime, config.riseLockMinutesAfter, now]);
 
   /** The target actually enforced tonight (gradual-shift aware). */
   const effectiveSleepTime = config.shiftTargetTime || config.sleepTime;
@@ -97,8 +99,18 @@ export function useNightToRise(riseAlarmTime?: string | null) {
       lockBeforeMin: config.sleepLockMinutesBefore,
       lockAfterMin: config.riseLockMinutesAfter,
       now,
+      // NEW (v4): wire the independent guard toggles + Sleep Guard end mode
+      // into the in-app time computation, so the status pill/countdown shown
+      // here always matches what native enforcement is actually doing.
+      sleepGuardEnabled: config.sleepGuardEnabled,
+      riseGuardEnabled: config.riseGuardEnabled,
+      sleepEndMode: config.sleepGuardEndMode,
+      sleepDurationMin: config.sleepGuardDurationMinutes,
     }),
-    [effectiveSleepTime, riseAlarmTime, config.sleepLockMinutesBefore, config.riseLockMinutesAfter, now],
+    [
+      effectiveSleepTime, riseAlarmTime, config.sleepLockMinutesBefore, config.riseLockMinutesAfter, now,
+      config.sleepGuardEnabled, config.riseGuardEnabled, config.sleepGuardEndMode, config.sleepGuardDurationMinutes,
+    ],
   );
 
   const status = useMemo(() => {

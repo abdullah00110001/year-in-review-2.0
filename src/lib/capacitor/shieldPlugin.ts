@@ -121,7 +121,31 @@ export interface ShieldPluginInterface {
   setDayBoundary(options: { startHour?: number; autoReset?: boolean }): Promise<DayBoundary>;
   getDayBoundary(): Promise<DayBoundary>;
   getNotificationSettings(): Promise<{ vibrate: boolean; sound: boolean; lowTimeAlert: boolean }>;
+
+  // 💬 Telegram Guard (offline, accessibility-based)
+  getTelegramGuard(): Promise<TelegramGuardSettings>;
+  setTelegramGuard(options: Partial<TelegramGuardSettings>): Promise<TelegramGuardSettings>;
 }
+
+export interface TelegramGuardSettings {
+  enabled: boolean;
+  blockChats: boolean;
+  blockSearch: boolean;
+  blockInviteLinks: boolean;
+  blockAllInvites: boolean;
+  blockMedia: boolean;
+  blockAllMedia: boolean;
+}
+
+export const DEFAULT_TELEGRAM_GUARD: TelegramGuardSettings = {
+  enabled: true,
+  blockChats: true,
+  blockSearch: true,
+  blockInviteLinks: true,
+  blockAllInvites: false,
+  blockMedia: true,
+  blockAllMedia: false,
+};
 
 export interface FocusSessionState {
   active: boolean;

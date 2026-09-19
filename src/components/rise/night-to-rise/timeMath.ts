@@ -100,7 +100,15 @@ export interface NightWindowInput {
   lockAfterMin: number;
   /** Current time (defaults to now). */
   now?: Date;
+  /** User can run Sleep Guard, Rise Guard, or both. Default: both on. */
+  sleepGuardEnabled?: boolean;
+  riseGuardEnabled?: boolean;
+  /** 'until-alarm' (default) or 'duration' — Sleep Guard auto-off. */
+  sleepEndMode?: 'until-alarm' | 'duration';
+  /** Minutes Sleep Guard runs in 'duration' mode. */
+  sleepDurationMin?: number;
 }
+
 
 export interface NightWindows {
   nowMin: number;
@@ -138,6 +146,10 @@ export function computeNightWindows({
   lockBeforeMin,
   lockAfterMin,
   now = new Date(),
+  sleepGuardEnabled = true,
+  riseGuardEnabled = true,
+  sleepEndMode = 'until-alarm',
+  sleepDurationMin = 180,
 }: NightWindowInput): NightWindows {
   const nowMin = minutesOfDay(now);
   const sleepTarget = parseHM(sleepTime);
@@ -145,17 +157,26 @@ export function computeNightWindows({
 
   const alarm = riseTime ? parseHM(riseTime) : null;
   // Sleep Guard runs from the wind-down start until the alarm (or a 9h30m
-  // fallback when there is no alarm).
-  const sleepEnd = alarm !== null ? alarm : norm(sleepTarget + 570);
+  // fallback when there is no alarm) — unless the user asked it to switch
+  // itself off after a fixed duration, in which case it ends at whichever
+  // comes first: that duration, or the alarm.
+  const untilAlarmEnd = alarm !== null ? alarm : norm(sleepTarget + 570);
+  let sleepEnd = untilAlarmEnd;
+  if (sleepEndMode === 'duration') {
+    const duration = Math.max(15, Math.round(sleepDurationMin));
+    const alarmSpan = alarm !== null ? windowSpan(sleepStart, alarm) : Number.POSITIVE_INFINITY;
+    sleepEnd = duration < alarmSpan ? norm(sleepStart + duration) : untilAlarmEnd;
+  }
 
   const riseStart = alarm;
   const riseEnd = alarm !== null ? norm(alarm + lockAfterMin) : null;
 
-  const sleepActive = inWindow(nowMin, sleepStart, sleepEnd);
+  const sleepActive = sleepGuardEnabled && inWindow(nowMin, sleepStart, sleepEnd);
   const riseActive =
-    riseStart !== null && riseEnd !== null && lockAfterMin > 0
+    riseGuardEnabled && riseStart !== null && riseEnd !== null && lockAfterMin > 0
       ? inWindow(nowMin, riseStart, riseEnd)
       : false;
+
 
   const nightStart = sleepStart;
   const nightEnd = riseEnd ?? sleepEnd;
@@ -215,4 +236,27 @@ export function nextOccurrenceMs(timeStr: string, from: Date = new Date()): numb
   d.setHours(Math.floor(target / 60), target % 60, 0, 0);
   if (d.getTime() <= from.getTime()) d.setDate(d.getDate() + 1);
   return d.getTime();
+}
+
+/**
+ * Alarm occurrence that belongs to the currently relevant Sleep-to-Rise
+ * window. During the post-alarm Rise Guard this deliberately returns today's
+ * already-fired alarm instead of jumping to tomorrow. Native enforcement needs
+ * that timestamp to keep Rise Guard active until its configured end.
+ */
+export function relevantAlarmOccurrenceMs(
+  timeStr: string,
+  riseLockMinutesAfter: number,
+  from: Date = new Date(),
+): number {
+  const target = parseHM(timeStr);
+  const occurrence = new Date(from);
+  occurrence.setHours(Math.floor(target / 60), target % 60, 0, 0);
+
+  const elapsed = from.getTime() - occurrence.getTime();
+  const riseWindowMs = Math.max(0, riseLockMinutesAfter) * 60_000;
+  if (elapsed <= 0 || elapsed < riseWindowMs) return occurrence.getTime();
+
+  occurrence.setDate(occurrence.getDate() + 1);
+  return occurrence.getTime();
 }

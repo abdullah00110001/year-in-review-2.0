@@ -41,6 +41,10 @@ public class BootReceiver extends BroadcastReceiver {
 
         Log.d(TAG, "Boot/replace detected (" + action + ") → restoring alarms");
 
+        // Blocking must survive reboots too, not just alarms.
+        try { com.mylifeos.app.shield.core.ForegroundGuardService.sync(context); }
+        catch (Throwable t) { Log.w(TAG, "guard sync failed", t); }
+
         int restored = 0, dropped = 0, failed = 0;
         long now = System.currentTimeMillis();
 
@@ -81,7 +85,6 @@ public class BootReceiver extends BroadcastReceiver {
         // Re-arm Sleep to Rise enforcement state (window / alarm reference).
         try {
             com.mylifeos.app.nighttorise.NightToRiseManager.onBootRestored(context);
-          ForegroundGuardService.kick(context); 
         } catch (Throwable t) {
             Log.w(TAG, "NightToRise boot restore skipped: " + t.getMessage());
         }

@@ -27,6 +27,18 @@ import com.mylifeos.app.plugins.PhotoPickerPlugin;
 public class MainActivity extends BridgeActivity {
   private static MainActivity instance;
 
+  /**
+   * NEW: true whenever MainActivity is actually visible/resumed. This is the
+   * single source of truth AlarmRecoveryReceiver.forceRingScreenForeground()
+   * now checks before doing anything — previously it unconditionally re-sent
+   * a deep-link intent to MainActivity every ~6 seconds while an alarm rang,
+   * even while MainActivity was already open and the user was mid-mission,
+   * which remounted the React ring screen and wiped mission progress
+   * (solvedCount etc.) every cycle. If the app is already visible, there is
+   * nothing to "force to foreground" — skip entirely.
+   */
+  public static volatile boolean isForeground = false;
+
   // ──────────────────────────────────────────
   // Rise mission anti-escape watchdog
   // ──────────────────────────────────────────
@@ -104,6 +116,9 @@ public class MainActivity extends BridgeActivity {
     try { registerPlugin(AppUpdatePlugin.class); } catch (Throwable t) { Log.e("MainActivity", "AppUpdatePlugin register failed", t); }
     super.onCreate(savedInstanceState);
     instance = this;
+    // Make sure blocking enforcement + its status notification are running.
+    try { com.mylifeos.app.shield.core.ForegroundGuardService.sync(this); }
+    catch (Throwable t) { Log.e("MainActivity", "guard sync failed", t); }
     // 🔔 Create FCM wake-up notification channel before push payload arrives
     try { ensureWakeUpChannel(); } catch (Throwable t) { Log.e("MainActivity", "ensureWakeUpChannel failed", t); }
     // Keep the WebView loading surface opaque and matching the ring screen
@@ -218,14 +233,22 @@ public class MainActivity extends BridgeActivity {
   }
 
   @Override
-  protected void onResume() {
+  public void onResume() {
     super.onResume();
+    isForeground = true; // NEW
     // Mission finished (or user genuinely came back) — no need to re-bring anymore.
     cancelReBring();
   }
 
   @Override
-  protected void onDestroy() {
+  public void onPause() {
+    super.onPause();
+    isForeground = false; // NEW
+  }
+
+  @Override
+  public void onDestroy() {
+    isForeground = false; // NEW
     cancelReBring();
     super.onDestroy();
   }

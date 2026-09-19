@@ -2,13 +2,26 @@ package com.mylifeos.app.nighttorise;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.CountDownTimer;
+import android.view.Gravity;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.mylifeos.app.R;
+import com.mylifeos.app.shield.ShieldAccessibilityService;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * NightToRiseBlockActivity — full-screen lock shown by the accessibility
@@ -19,14 +32,10 @@ import com.mylifeos.app.R;
  *   "endMs"   : long
  *   "strict"  : boolean
  *   "package" : String  (the blocked app, re-checked on resume)
+ *   "phase"   : String  ("SLEEP_LOCK" | "RISE_LOCK") — selects icon + accent tint
  *
- * Repeat-safe: the screen re-evaluates the lock on every resume, so returning
- * to the blocked app through Recents or relaunching it cannot bypass it. The
- * screen only closes itself when the window has genuinely ended.
- *
- * Tapping "Emergency unlock" writes a pending-break flag to
- * NightToRisePreferences so the JS layer picks it up on resume and resets the
- * streak.
+ * Sleep and Rise use distinct, calm full-screen color environments while
+ * keeping the exact same controls and safety information.
  */
 public class NightToRiseBlockActivity extends Activity {
 
@@ -34,13 +43,43 @@ public class NightToRiseBlockActivity extends Activity {
     public static final String EXTRA_END_MS  = "endMs";
     public static final String EXTRA_STRICT  = "strict";
     public static final String EXTRA_PACKAGE = "package";
+    public static final String EXTRA_PHASE   = "phase";
+
+    private static final int KILL_TAP_COUNT = 7;
+    private static final long KILL_TAP_WINDOW_MS = 5000;
+    private final List<Long> killTaps = new ArrayList<>();
 
     private CountDownTimer timer;
     private CountDownTimer strictTimer;
     private String blockedPackage;
     private boolean broke = false;
 
-    /** Records the break for JS streak sync and sends the user home. */
+    private static final Map<String, String> FRIENDLY_NAMES = new HashMap<>();
+    static {
+        FRIENDLY_NAMES.put("com.android.dialer", "Phone");
+        FRIENDLY_NAMES.put("com.google.android.dialer", "Phone");
+        FRIENDLY_NAMES.put("com.samsung.android.dialer", "Phone");
+        FRIENDLY_NAMES.put("com.android.phone", "Phone");
+        FRIENDLY_NAMES.put("com.android.server.telecom", "Phone");
+        FRIENDLY_NAMES.put("com.android.contacts", "Contacts");
+        FRIENDLY_NAMES.put("com.android.deskclock", "Clock");
+        FRIENDLY_NAMES.put("com.google.android.deskclock", "Clock");
+        FRIENDLY_NAMES.put("com.sec.android.app.clockpackage", "Clock");
+        FRIENDLY_NAMES.put("com.android.emergency", "Emergency");
+        FRIENDLY_NAMES.put("com.android.systemui", "System");
+        FRIENDLY_NAMES.put("com.android.settings", "Settings");
+        FRIENDLY_NAMES.put("org.telegram.messenger", "Telegram");
+        FRIENDLY_NAMES.put("com.google.android.apps.messaging", "Messages");
+    }
+
+    private String friendlyName(String pkg) {
+        String known = FRIENDLY_NAMES.get(pkg);
+        if (known != null) return known;
+        int lastDot = pkg.lastIndexOf('.');
+        String tail = lastDot >= 0 && lastDot < pkg.length() - 1 ? pkg.substring(lastDot + 1) : pkg;
+        return tail.length() <= 1 ? pkg : Character.toUpperCase(tail.charAt(0)) + tail.substring(1);
+    }
+
     private void breakLock(NightToRisePreferences prefs) {
         broke = true;
         prefs.recordPendingBreak();
@@ -55,7 +94,6 @@ public class NightToRiseBlockActivity extends Activity {
         finish();
     }
 
-    /** Updates the strict-mode override button label / enabled state. */
     private void refreshStrictOverride(NightToRisePreferences prefs, Button override) {
         long req = prefs.strictUnlockRequestedAt();
         if (req <= 0L) {
@@ -77,18 +115,16 @@ public class NightToRiseBlockActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
+        ShieldAccessibilityService.dismissBlockingOverlay();
         getWindow().addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         );
-
         setContentView(R.layout.activity_night_to_rise_block);
         bind(getIntent());
     }
 
-    /** The service reuses this singleTask activity for every new block event. */
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -101,10 +137,21 @@ public class NightToRiseBlockActivity extends Activity {
         long   endMs   = intent != null ? intent.getLongExtra(EXTRA_END_MS, 0L) : 0L;
         boolean strict = intent != null && intent.getBooleanExtra(EXTRA_STRICT, false);
         blockedPackage = intent != null ? intent.getStringExtra(EXTRA_PACKAGE) : null;
+        String phase = intent != null ? intent.getStringExtra(EXTRA_PHASE) : null;
+        boolean isRise = "RISE_LOCK".equals(phase);
 
-        ((TextView) findViewById(R.id.n2r_message)).setText(message != null ? message : "Locked.");
+        TextView messageView = findViewById(R.id.n2r_message);
+        messageView.setText(message != null ? message
+            : (isRise ? "Screens stay closed a little longer." : "Time to rest. Put the phone down."));
+        messageView.setOnClickListener(v -> registerKillSwitchTap());
+
+        applyPhaseVisuals(isRise);
 
         final NightToRisePreferences prefs = new NightToRisePreferences(this);
+        final NightToRiseManager manager = new NightToRiseManager(this);
+        Set<String> available = NightToRiseDecider.effectiveAllowedPackages(manager.snapshot());
+        populateAllowedChips(available, isRise);
+
         final Button override = findViewById(R.id.n2r_override);
         override.setVisibility(android.view.View.VISIBLE);
 
@@ -114,8 +161,6 @@ public class NightToRiseBlockActivity extends Activity {
             override.setText("Emergency unlock");
             override.setOnClickListener(v -> breakLock(prefs));
         } else {
-            // Strict mode: the override is never hidden (real emergencies
-            // happen), but it costs a persistent 10 minute wait.
             refreshStrictOverride(prefs, override);
             override.setOnClickListener(v -> {
                 long req = prefs.strictUnlockRequestedAt();
@@ -153,11 +198,108 @@ public class NightToRiseBlockActivity extends Activity {
         findViewById(R.id.n2r_home).setOnClickListener(v -> goHome());
     }
 
-    /**
-     * Re-evaluates the lock. The screen stays up while the window is still
-     * enforcing (so a countdown that ends early — e.g. the alarm moved — does
-     * not silently unlock the phone) and closes once it is genuinely over.
-     */
+    /** Phase-specific background gradient + icon + title. */
+    private void applyPhaseVisuals(boolean isRise) {
+        try {
+            android.view.View root = findViewById(R.id.n2r_root);
+            TextView title = findViewById(R.id.n2r_title);
+            TextView icon = findViewById(R.id.n2r_icon);
+            TextView pill = findViewById(R.id.n2r_phase_pill);
+
+            root.setBackgroundResource(isRise ? R.drawable.n2r_bg_rise : R.drawable.n2r_bg_sleep);
+            // The window itself is painted too, so rotating the screen or a
+            // slow first frame never flashes a different colour.
+            getWindow().setBackgroundDrawableResource(
+                isRise ? R.drawable.n2r_bg_rise : R.drawable.n2r_bg_sleep);
+            title.setText(isRise ? "Rise with intention" : "Rest now");
+            icon.setText(isRise ? "\uD83C\uDF05" : "\uD83C\uDF19"); // 🌅 sunrise vs 🌙 moon
+            if (pill != null) pill.setText(isRise ? "RISE GUARD" : "SLEEP GUARD");
+        } catch (Throwable ignored) {
+            // Never let cosmetic styling crash the block screen itself.
+        }
+    }
+
+    /** One short, calm entrance so the lock never feels like a crash. */
+    private void animateIn() {
+        try {
+            android.view.View content = findViewById(R.id.n2r_content);
+            if (content == null) return;
+            content.setAlpha(0f);
+            content.setTranslationY(dp(14));
+            content.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(260)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .start();
+        } catch (Throwable ignored) {}
+    }
+
+    /** Builds frosted-glass pill chips (3 per row) for the allowed-apps list. */
+    private void populateAllowedChips(Set<String> packages, boolean isRise) {
+        LinearLayout container = findViewById(R.id.n2r_allowed_container);
+        container.removeAllViews();
+
+        // Package ids are noise on a lock screen — show de-duplicated, human
+        // names and cap the list so the screen stays calm.
+        java.util.LinkedHashSet<String> labels = new java.util.LinkedHashSet<>();
+        for (String pkg : packages) {
+            if (pkg == null || pkg.trim().isEmpty()) continue;
+            labels.add(friendlyName(pkg.trim()));
+            if (labels.size() >= 6) break;
+        }
+
+        LinearLayout row = null;
+        int inRow = 0;
+        for (String label : labels) {
+            if (row == null || inRow >= 3) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                rowLp.topMargin = dp(8);
+                container.addView(row, rowLp);
+                inRow = 0;
+            }
+            TextView chip = new TextView(this);
+            chip.setText(label);
+            chip.setTextSize(11);
+            chip.setTextColor(Color.WHITE);
+            chip.setPadding(dp(14), dp(7), dp(14), dp(7));
+            GradientDrawable pill = new GradientDrawable();
+            pill.setColor(Color.parseColor("#26FFFFFF"));
+            pill.setStroke(dp(1), Color.parseColor("#40FFFFFF"));
+            pill.setCornerRadius(dp(20));
+            chip.setBackground(pill);
+            LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            chipLp.setMargins(dp(4), 0, dp(4), 0);
+            row.addView(chip, chipLp);
+            inRow++;
+        }
+    }
+
+    private int dp(int v) {
+        float density = getResources().getDisplayMetrics().density;
+        return Math.round(v * density);
+    }
+
+    private void registerKillSwitchTap() {
+        long now = System.currentTimeMillis();
+        killTaps.add(now);
+        while (!killTaps.isEmpty() && now - killTaps.get(0) > KILL_TAP_WINDOW_MS) {
+            killTaps.remove(0);
+        }
+        if (killTaps.size() >= KILL_TAP_COUNT) {
+            new NightToRisePreferences(this).emergencyDisable();
+            Toast.makeText(this, "Sleep to Rise turned off", Toast.LENGTH_LONG).show();
+            killTaps.clear();
+            broke = true;
+            goHome();
+        }
+    }
+
     private void recheckOrFinish() {
         if (broke) { finish(); return; }
         try {
@@ -169,6 +311,7 @@ public class NightToRiseBlockActivity extends Activity {
                 again.putExtra(EXTRA_MESSAGE, d.message);
                 again.putExtra(EXTRA_END_MS, d.endTimeMs);
                 again.putExtra(EXTRA_STRICT, mgr.prefs().strictMode());
+                again.putExtra(EXTRA_PHASE, d.phase.name());
                 bind(again);
                 return;
             }

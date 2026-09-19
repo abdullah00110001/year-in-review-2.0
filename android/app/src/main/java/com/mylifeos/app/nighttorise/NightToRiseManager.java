@@ -10,7 +10,9 @@ import android.content.Context;
  *
  * Sleep lock runs continuously from the configured pre-sleep start until either
  * the next Rise alarm fires (seamless hand-off to RISE_LOCK) or the fallback
- * maximum elapses when no alarm is set — there is no gap window.
+ * maximum elapses when no alarm is set — unless the user has chosen
+ * "duration" end mode, in which case Sleep Guard auto-releases after a fixed
+ * number of minutes and a gap follows until Rise Guard starts at the alarm.
  */
 public class NightToRiseManager {
 
@@ -41,8 +43,8 @@ public class NightToRiseManager {
 
     /**
      * Runtime safety exemptions that can only be resolved on-device: the user's
-     * default SMS app and the default dialer. These are ALWAYS reachable during
-     * a lock window, whatever the allowlist says.
+     * default SMS app, the default dialer, and every launcher that could ever
+     * be the home-screen handler on this device.
      */
     private java.util.Set<String> safetyPackages() {
         java.util.Set<String> out = new java.util.HashSet<>();
@@ -56,6 +58,27 @@ public class NightToRiseManager {
             if (tm != null) {
                 String dialer = tm.getDefaultDialerPackage();
                 if (dialer != null) out.add(dialer);
+            }
+        } catch (Throwable ignored) {}
+        // CRITICAL FIX: the home-screen launcher was never exempt, so pressing
+        // Home during a lock window triggered the block screen ON TOP OF the
+        // launcher itself — leaving no way to navigate anywhere (home screen,
+        // notification shade, app switcher all became unreachable, since the
+        // block screen kept re-covering them every poll tick). Every launcher
+        // that could ever be the default (device-dependent — MIUI, stock,
+        // Nova, etc.) must be exempt, resolved dynamically same as SMS/dialer
+        // above rather than hardcoded, since the package name varies by device/ROM.
+        try {
+            android.content.Intent home = new android.content.Intent(android.content.Intent.ACTION_MAIN);
+            home.addCategory(android.content.Intent.CATEGORY_HOME);
+            android.content.pm.PackageManager pm = appCtx.getPackageManager();
+            android.content.pm.ResolveInfo ri = pm.resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null && ri.activityInfo != null) out.add(ri.activityInfo.packageName);
+            // Also exempt every app that COULD handle the home intent (covers
+            // cases where the resolver above returns a chooser instead of the
+            // actual launcher, e.g. right after a ROM update reset the default).
+            for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(home, 0)) {
+                if (r.activityInfo != null) out.add(r.activityInfo.packageName);
             }
         } catch (Throwable ignored) {}
         return out;
@@ -78,6 +101,18 @@ public class NightToRiseManager {
         cfg.sleepMessage    = prefs.sleepMessage();
         cfg.riseMessage     = prefs.riseMessage();
         cfg.selfPackage     = selfPackage;
+        // NEW (v3 safety cap): wire the user-configurable ceiling through to
+        // the decider. Falls back to the decider's own default (9.5h) if the
+        // stored value is somehow 0/unset.
+        int capHours = prefs.safetyCapHours();
+        cfg.safetyCapMinutes = capHours > 0 ? capHours * 60 : NightToRiseDecider.DEFAULT_MAX_LOCK_MINUTES;
+
+        // NEW (v4): independent guard toggles + Sleep Guard end mode.
+        cfg.sleepGuardEnabled = prefs.sleepGuardEnabled();
+        cfg.riseGuardEnabled  = prefs.riseGuardEnabled();
+        cfg.sleepGuardEndMode = prefs.sleepGuardEndMode();
+        cfg.sleepGuardDurationMinutes = prefs.sleepGuardDurationMinutes();
+
         return cfg;
     }
 

@@ -1,4 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
+
+/**
+ * formatCountdown — "Xd Yh Zm" / "Yh Zm" / "Zm". Same helper as in Rise.tsx;
+ * duplicated locally (rather than a shared import) to keep this patch
+ * self-contained and low-risk. See Rise.tsx for the full rationale.
+ */
+function formatCountdown(diffMs: number): string {
+  const totalMinutes = Math.max(0, Math.floor(diffMs / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
 import { createPortal } from 'react-dom';
 import Picker from 'react-mobile-picker';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -296,9 +311,11 @@ export function RiseAlarmEditor({
 
     if (!nextDate) return '';
     const diff = nextDate.getTime() - now.getTime();
-    const hrs  = Math.floor(diff / 3.6e6);
-    const mins = Math.floor((diff % 3.6e6) / 6e4);
-    return `Rings in ${hrs}h ${mins}m`;
+    // FIX: same multi-day-gap bug as Rise.tsx's countdown — hrs/mins with no
+    // days component overflowed to things like "Rings in 60h 12m" for a
+    // weekday-only alarm checked on a Friday night. formatCountdown() below
+    // breaks it into days/hours/minutes properly.
+    return `Rings in ${formatCountdown(diff)}`;
   };
 
   const formatDisplayTime = () => {
@@ -1039,5 +1056,7 @@ function RingtoneSheet({ selectedId, onSelect, onClose }: { selectedId?: string;
     document.body,
   );
 }
+
+
 
 

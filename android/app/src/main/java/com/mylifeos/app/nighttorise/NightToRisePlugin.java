@@ -21,6 +21,12 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  *     actually implemented here — every call silently failed and returned
  *     null. This is why the in-app "Rest now" overlay's phase was always
  *     computed locally in JS instead of reflecting real native enforcement.]
+ *
+ * FIX (v2): setConfig/setRiseAlarm now also call ForegroundGuardService.kick(),
+ * so the polling enforcement service actually starts/stops immediately when
+ * the user toggles Sleep to Rise or changes settings — it used to only start
+ * on boot (via BootReceiver), so a fresh toggle mid-session had no effect
+ * until the next reboot.
  */
 @CapacitorPlugin(name = "NightToRise")
 public class NightToRisePlugin extends Plugin {
@@ -31,6 +37,7 @@ public class NightToRisePlugin extends Plugin {
         if (json == null) { call.reject("json required"); return; }
         try {
             new NightToRisePreferences(getContext()).saveJsonConfig(json);
+            com.mylifeos.app.shield.core.ForegroundGuardService.sync(getContext());
             call.resolve();
         } catch (Exception t) {
             call.reject("setConfig failed: " + t.getMessage(), t);
@@ -41,6 +48,7 @@ public class NightToRisePlugin extends Plugin {
     public void setRiseAlarm(PluginCall call) {
         long ms = call.getLong("epochMillis", 0L);
         new NightToRisePreferences(getContext()).saveRiseAlarmMillis(ms);
+        com.mylifeos.app.shield.core.ForegroundGuardService.sync(getContext());
         call.resolve();
     }
 
@@ -81,6 +89,85 @@ public class NightToRisePlugin extends Plugin {
         ret.put("accessibilityEnabled", isAccessibilityServiceEnabled(ctx));
         call.resolve(ret);
     }
+
+    /**
+     * getDiagnostics — live self-test of the whole enforcement chain, so
+     * "guards say active but nothing is blocked" is answerable on-device
+     * without a log cable. Also SELF-HEALS: re-syncs the polling guard
+     * service, which OEM task killers (MIUI/HyperOS) love to kill silently.
+     */
+    @PluginMethod
+    public void getDiagnostics(PluginCall call) {
+        Context ctx = getContext();
+        NightToRiseManager mgr = new NightToRiseManager(ctx);
+        NightToRiseDecider.Config cfg = mgr.snapshot();
+        NightToRiseManager.Decision d =
+            mgr.decide(System.currentTimeMillis(), "__n2r_status_probe__");
+
+        // Self-heal: make sure the poll service is running when it should be.
+        boolean synced = false;
+        try {
+            com.mylifeos.app.shield.core.ForegroundGuardService.sync(ctx);
+            synced = true;
+        } catch (Throwable ignored) {}
+
+        JSObject ret = new JSObject();
+        ret.put("enabled", mgr.prefs().isEnabled());
+        ret.put("configured", cfg.enabled);
+        ret.put("phase", d.phase.name());
+        ret.put("locking", d.shouldBlock);
+        ret.put("endTimeMs", d.endTimeMs);
+        ret.put("sleepGuardEnabled", cfg.sleepGuardEnabled);
+        ret.put("riseGuardEnabled", cfg.riseGuardEnabled);
+        ret.put("sleepTime", cfg.sleepTime);
+        ret.put("riseAlarmMs", cfg.riseAlarmMs);
+        ret.put("allowedCount", cfg.allowedPackages == null ? 0 : cfg.allowedPackages.size());
+        ret.put("accessibilityEnabled", isAccessibilityServiceEnabled(ctx));
+        ret.put("accessibilityConnected",
+            com.mylifeos.app.shield.ShieldAccessibilityService.isConnected());
+        ret.put("overlayGranted", hasOverlay(ctx));
+        ret.put("guardServiceSynced", synced);
+        ret.put("guardServiceRunning", isGuardServiceRunning(ctx));
+
+        // Last observed enforcement pass + last actual block.
+        ret.put("lastPhase", com.mylifeos.app.shield.core.BlockEnforcer.lastPhase);
+        ret.put("lastLocking", com.mylifeos.app.shield.core.BlockEnforcer.lastLocking);
+        ret.put("lastForegroundPackage",
+            com.mylifeos.app.shield.core.BlockEnforcer.lastForegroundPackage());
+        ret.put("lastGuardPassAt", com.mylifeos.app.shield.core.BlockEnforcer.lastGuardPassAt);
+        ret.put("lastUsageAccess", com.mylifeos.app.shield.core.BlockEnforcer.lastUsageAccess);
+        ret.put("lastBlockAt", com.mylifeos.app.shield.core.BlockEnforcer.lastBlockAt);
+        ret.put("lastBlockedPkg", com.mylifeos.app.shield.core.BlockEnforcer.lastBlockedPkg);
+        ret.put("lastError", com.mylifeos.app.shield.core.BlockEnforcer.lastError);
+        call.resolve(ret);
+    }
+
+    private boolean hasOverlay(Context ctx) {
+        try {
+            return android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M
+                || Settings.canDrawOverlays(ctx);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean isGuardServiceRunning(Context ctx) {
+        try {
+            android.app.ActivityManager am =
+                (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return false;
+            String target =
+                com.mylifeos.app.shield.core.ForegroundGuardService.class.getName();
+            for (android.app.ActivityManager.RunningServiceInfo s : am.getRunningServices(200)) {
+                if (s.service != null && target.equals(s.service.getClassName())) return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
 
     private boolean isAccessibilityServiceEnabled(Context ctx) {
         try {

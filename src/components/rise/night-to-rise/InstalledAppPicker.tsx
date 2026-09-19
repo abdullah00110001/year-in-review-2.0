@@ -68,7 +68,7 @@ export function InstalledAppPicker({
       setNativeUnavailable(false);
       try {
         if (isNative && isAndroid) {
-          const res = await Shield.getInstalledApps();
+          const res = await Shield.getInstalledApps({ icons: false });
           const list = (res?.apps ?? [])
             .filter((a) => a?.packageName)
             .map((a) => ({ id: a.packageName, name: a.appName || a.packageName, icon: a.icon }));
@@ -113,12 +113,12 @@ export function InstalledAppPicker({
       ? merged.filter((a) => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q))
       : merged;
     return [...list].sort((a, b) => {
-      const as = picked.has(a.id) ? 0 : 1;
-      const bs = picked.has(b.id) ? 0 : 1;
+      const as = 0;
+      const bs = 0;
       if (as !== bs) return as - bs;
       return a.name.localeCompare(b.name);
     });
-  }, [merged, query, picked]);
+  }, [merged, query]);
 
   const toggle = (id: string) => {
     if (lockedIds.includes(id)) {

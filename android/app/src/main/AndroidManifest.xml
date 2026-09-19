@@ -144,17 +144,6 @@
             android:foregroundServiceType="mediaPlayback"
             android:stopWithTask="false" />
 
-        <!-- Sleep to Rise — real enforcement + status notification -->
-        <service
-            android:name=".nighttorise.ForegroundGuardService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="sleep_to_rise_enforcement" />
-        </service>
-
         <!-- ================================================
         🔁 BOOT RECEIVER
         ================================================ -->
@@ -188,6 +177,18 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="focus_session_timer_overlay" />
+        </service>
+
+        <!-- Reliability layer: polls the foreground app while a lock or a
+             blocklist is active, and shows the always-visible lock status. -->
+        <service
+            android:name=".shield.core.ForegroundGuardService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="app_blocking_enforcement" />
         </service>
 
         <service
@@ -248,8 +249,10 @@
             android:enabled="true"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTask"
             android:taskAffinity=""
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:theme="@style/AppTheme.NoActionBar" />
 
         <!-- 📂 File Provider -->
@@ -273,8 +276,10 @@
             android:name="com.mylifeos.app.nighttorise.NightToRiseBlockActivity"
             android:exported="false"
             android:launchMode="singleTask"
+            android:taskAffinity=""
             android:excludeFromRecents="true"
-            android:showOnLockScreen="true"
-            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/AppTheme.SleepToRiseBlock" />
     </application>
 </manifest>

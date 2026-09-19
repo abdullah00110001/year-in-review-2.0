@@ -3,6 +3,7 @@ package com.mylifeos.app.nighttorise;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.TimeZone;
 
@@ -13,6 +14,19 @@ import java.util.TimeZone;
  * tested directly (midnight rollover, blocklist vs allowlist, safety
  * exemptions, alarm hand-off). NightToRiseManager adapts the persisted
  * preferences onto {@link Config} and delegates here.
+ *
+ * FIX (v4): Sleep Guard and Rise Guard can now be toggled independently
+ * (cfg.sleepGuardEnabled / cfg.riseGuardEnabled), and Sleep Guard supports two
+ * end modes:
+ *   - "until-alarm" (default, unchanged behavior): Sleep Guard runs
+ *     continuously until the Rise alarm fires (or the safety cap, if no
+ *     alarm) — no gap between Sleep Guard and Rise Guard.
+ *   - "duration": Sleep Guard auto-releases a fixed number of minutes after
+ *     it starts (cfg.sleepGuardDurationMinutes), regardless of the alarm.
+ *     This intentionally creates a GAP — the phone is unlocked between Sleep
+ *     Guard ending and Rise Guard starting at the alarm — matching what was
+ *     explicitly requested: "Sleep Guard auto-off after 2-3 hours, Rise
+ *     Guard starts separately when the alarm fires."
  */
 public final class NightToRiseDecider {
 
@@ -71,6 +85,21 @@ public final class NightToRiseDecider {
         public String  selfPackage = "com.mylifeos.app";
         /** Injectable for deterministic tests. */
         public TimeZone timeZone = TimeZone.getDefault();
+        /**
+         * NEW (v3 safety cap): user-configurable ceiling (minutes) on how long
+         * Sleep Guard can run with NO valid alarm attached, so a missed/never
+         * -set alarm can never leave the lock running indefinitely. Defaults
+         * to DEFAULT_MAX_LOCK_MINUTES when the user hasn't set one.
+         */
+        public int safetyCapMinutes = DEFAULT_MAX_LOCK_MINUTES;
+
+        // NEW (v4) — independent guard toggles + Sleep Guard end mode.
+        public boolean sleepGuardEnabled = true;
+        public boolean riseGuardEnabled  = true;
+        /** "until-alarm" (default) or "duration". */
+        public String  sleepGuardEndMode = "until-alarm";
+        /** Minutes Sleep Guard runs when sleepGuardEndMode == "duration". */
+        public int     sleepGuardDurationMinutes = 180;
     }
 
 
@@ -95,6 +124,29 @@ public final class NightToRiseDecider {
         return false;
     }
 
+    /** Packages displayed by the native block screen as still reachable. */
+    public static Set<String> effectiveAllowedPackages(Config cfg) {
+        Set<String> out = new LinkedHashSet<>();
+        if (cfg.allowedPackages != null) out.addAll(cfg.allowedPackages);
+        if (cfg.extraSafePackages != null) out.addAll(cfg.extraSafePackages);
+        Collections.addAll(out, SAFE_EXACT);
+        return out;
+    }
+
+    /**
+     * FIX (v5) — mirrors the JS model in timeMath.ts exactly, which is the
+     * SINGLE source of truth the UI shows to the user:
+     *
+     *   - Sleep Guard : [sleepStart, alarmTimeOfDay) on the clock circle.
+     *   - Rise Guard  : [alarmTimeOfDay, alarmTimeOfDay + riseAfterMin).
+     *
+     * Previously the native side rejected any alarm more than 18h after the
+     * sleep start ("hasAlarm=false"), fell back to the safety cap, and ALSO
+     * skipped Rise Guard entirely in that case. The UI, working purely on the
+     * 24h clock, kept saying "Sleep Guard active" / "Rise Guard active" while
+     * native reported ARMED and blocked nothing. Both guards are now derived
+     * from the alarm's time-of-day, so what the UI shows is what native does.
+     */
     public static Decision decide(Config cfg, long nowMs, String foregroundPackage) {
         if (cfg == null || !cfg.enabled) return new Decision(Phase.OFF, false, 0, "");
         if (cfg.pausedUntilMs > nowMs)   return new Decision(Phase.PAUSED, false, cfg.pausedUntilMs, "");
@@ -102,50 +154,82 @@ public final class NightToRiseDecider {
         // ---- Safety exemptions come first ----
         if (isSafePackage(cfg, foregroundPackage)) return new Decision(Phase.ARMED, false, 0, "");
 
-        // ---- ALLOWLIST ONLY: anything not explicitly allowed is locked ----
+        // ---- ALLOWLIST: anything explicitly allowed passes through ----
         if (foregroundPackage != null
             && cfg.allowedPackages != null
             && cfg.allowedPackages.contains(foregroundPackage)) {
             return new Decision(Phase.ARMED, false, 0, "");
         }
 
+        int  sleepStartMin = sleepStartMinuteOfDay(cfg);
+        long sleepStartMs  = mostRecentOccurrence(cfg, sleepStartMin, nowMs);
+        boolean hasAlarm   = cfg.riseAlarmMs > 0;
 
-        // ---- Sleep-start time (today or yesterday, whichever is most recent) ----
-        int sleepStartMin = sleepStartMinuteOfDay(cfg);
-        long sleepStartMs = mostRecentOccurrence(cfg, sleepStartMin, nowMs);
-
-        // Schedule-day check uses the DAY THE SLEEP WINDOW STARTED, not "now",
-        // since "now" may already be past midnight into the next calendar day.
-        if (!isDayActive(cfg, sleepStartMs)) {
-            Decision riseOnly = checkRiseOnly(cfg, nowMs);
-            if (riseOnly != null) return riseOnly;
-            return new Decision(Phase.INACTIVE_DAY, false, 0, "");
+        // ---- Rise Guard: pure time-of-day window, checked FIRST ----
+        if (cfg.riseGuardEnabled && hasAlarm && cfg.riseAfterMin > 0) {
+            int  alarmMin  = minuteOfDay(cfg, cfg.riseAlarmMs);
+            long riseStart = mostRecentOccurrence(cfg, alarmMin, nowMs);
+            long riseEnd   = riseStart + (long) cfg.riseAfterMin * 60_000L;
+            if (nowMs >= riseStart && nowMs < riseEnd) {
+                // Honour the schedule of the night that led into this morning.
+                long nightStart = mostRecentOccurrence(cfg, sleepStartMin, riseStart);
+                if (isDayActive(cfg, nightStart)) {
+                    return new Decision(Phase.RISE_LOCK, true, riseEnd, cfg.riseMessage);
+                }
+            }
         }
 
-        long alarmMs = cfg.riseAlarmMs;
-        // An alarm only belongs to THIS sleep window when it lands inside a sane
-        // night horizon after the window opened. Accepting any future alarm made
-        // a next-night alarm keep yesterday's window "open" all day long, so
-        // apps stayed blocked at e.g. 22:00-1min the following evening.
-        boolean hasAlarm = alarmMs > sleepStartMs
-                && alarmMs <= sleepStartMs + MAX_WINDOW_MS;
+        // Schedule-day check uses the DAY THE SLEEP WINDOW STARTED.
+        if (!isDayActive(cfg, sleepStartMs)) return new Decision(Phase.INACTIVE_DAY, false, 0, "");
 
-        if (hasAlarm) {
-            long riseEnd = alarmMs + (long) cfg.riseAfterMin * 60_000L;
-            if (nowMs >= sleepStartMs && nowMs < alarmMs) {
-                return new Decision(Phase.SLEEP_LOCK, true, alarmMs, cfg.sleepMessage);
+        // ---- Sleep Guard phase ----
+        if (cfg.sleepGuardEnabled) {
+            long alarmMs = hasAlarm
+                ? nextOccurrenceAfter(cfg, minuteOfDay(cfg, cfg.riseAlarmMs), sleepStartMs)
+                : 0L;
+            long sleepEnd;
+            if ("duration".equals(cfg.sleepGuardEndMode)) {
+                int dur = Math.max(15, cfg.sleepGuardDurationMinutes);
+                sleepEnd = sleepStartMs + (long) dur * 60_000L;
+                if (hasAlarm && alarmMs < sleepEnd) sleepEnd = alarmMs;
+            } else {
+                sleepEnd = hasAlarm ? alarmMs : sleepStartMs + (long) cfg.safetyCapMinutes * 60_000L;
             }
-            if (nowMs >= alarmMs && nowMs < riseEnd) {
-                return new Decision(Phase.RISE_LOCK, true, riseEnd, cfg.riseMessage);
-            }
-        } else {
-            long fallbackEnd = sleepStartMs + (long) DEFAULT_MAX_LOCK_MINUTES * 60_000L;
-            if (nowMs >= sleepStartMs && nowMs < fallbackEnd) {
-                return new Decision(Phase.SLEEP_LOCK, true, fallbackEnd, cfg.sleepMessage);
+            if (nowMs >= sleepStartMs && nowMs < sleepEnd) {
+                return new Decision(Phase.SLEEP_LOCK, true, sleepEnd, cfg.sleepMessage);
             }
         }
 
         return new Decision(Phase.ARMED, false, 0, "");
+    }
+
+    private static final long DAY_MS = 24L * 60 * 60 * 1000;
+
+    /** Local minute-of-day (0..1439) of an epoch timestamp. */
+    static int minuteOfDay(Config cfg, long epochMs) {
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(epochMs);
+        return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+    }
+
+    /** Earliest timestamp strictly AFTER {@code afterMs} at which the clock reads `minuteOfDay`. */
+    static long nextOccurrenceAfter(Config cfg, int minuteOfDay, long afterMs) {
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(afterMs);
+        c.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
+        c.set(Calendar.MINUTE, minuteOfDay % 60);
+        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0);
+        if (c.getTimeInMillis() <= afterMs) c.add(Calendar.DAY_OF_MONTH, 1);
+        return c.getTimeInMillis();
+    }
+
+    /** Kept for callers/tests: snaps an alarm onto (sleepStartMs, sleepStartMs + 24h]. */
+    static long alarmForWindow(long alarmMs, long sleepStartMs) {
+        if (alarmMs <= 0) return 0L;
+        long shifted = alarmMs;
+        while (shifted - sleepStartMs > DAY_MS) shifted -= DAY_MS;
+        while (shifted <= sleepStartMs) shifted += DAY_MS;
+        return shifted;
     }
 
     static int sleepStartMinuteOfDay(Config cfg) {
@@ -157,19 +241,6 @@ public final class NightToRiseDecider {
         return ((sh * 60 + sm) - cfg.sleepBeforeMin + 1440 * 2) % 1440;
     }
 
-    /**
-     * A rise-lock that is already open must finish naturally even when the
-     * calendar day it rolled into is not part of the schedule.
-     */
-    private static Decision checkRiseOnly(Config cfg, long nowMs) {
-        long alarmMs = cfg.riseAlarmMs;
-        if (alarmMs <= 0) return null;
-        long riseEnd = alarmMs + (long) cfg.riseAfterMin * 60_000L;
-        if (nowMs >= alarmMs && nowMs < riseEnd) {
-            return new Decision(Phase.RISE_LOCK, true, riseEnd, cfg.riseMessage);
-        }
-        return null;
-    }
 
     static boolean isDayActive(Config cfg, long atMs) {
         Calendar c = Calendar.getInstance(cfg.timeZone);

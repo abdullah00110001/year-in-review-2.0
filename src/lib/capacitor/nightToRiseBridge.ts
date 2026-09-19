@@ -14,6 +14,43 @@ interface NightToRiseNativePlugin {
   setConfig(options: { json: string }): Promise<void>;
   setRiseAlarm(options: { epochMillis: number }): Promise<void>;
   consumePendingBreak(): Promise<{ broke: boolean }>;
+  getStatus(): Promise<NativeLockStatus>;
+  getDiagnostics(): Promise<NativeDiagnostics>;
+}
+
+/** Live self-test of the native enforcement chain. */
+export interface NativeDiagnostics {
+  enabled: boolean;
+  configured: boolean;
+  phase: string;
+  locking: boolean;
+  endTimeMs: number;
+  sleepGuardEnabled: boolean;
+  riseGuardEnabled: boolean;
+  sleepTime: string;
+  riseAlarmMs: number;
+  allowedCount: number;
+  accessibilityEnabled: boolean;
+  accessibilityConnected: boolean;
+  overlayGranted: boolean;
+  guardServiceSynced: boolean;
+  guardServiceRunning: boolean;
+  lastPhase: string;
+  lastLocking: boolean;
+  lastForegroundPackage: string | null;
+  lastGuardPassAt: number;
+  lastUsageAccess: boolean;
+  lastBlockAt: number;
+  lastBlockedPkg: string | null;
+  lastError: string | null;
+}
+
+export interface NativeLockStatus {
+  enabled: boolean;
+  phase: 'OFF' | 'ARMED' | 'SLEEP_LOCK' | 'RISE_LOCK' | 'PAUSED' | 'INACTIVE_DAY';
+  locking: boolean;
+  endTimeMs: number;
+  accessibilityEnabled: boolean;
 }
 
 const Plugin = registerPlugin<NightToRiseNativePlugin>('NightToRise');
@@ -47,6 +84,29 @@ export const nightToRiseBridge = {
     } catch (e) {
       console.warn('[NightToRise bridge] consumePendingBreak failed', e);
       return false;
+    }
+  },
+  /** Real native enforcement state — reflects what the OS is actually doing. */
+  async getStatus(): Promise<NativeLockStatus | null> {
+    if (!isAndroid) return null;
+    try {
+      return await Plugin.getStatus();
+    } catch (e) {
+      console.warn('[NightToRise bridge] getStatus failed', e);
+      return null;
+    }
+  },
+  /**
+   * Full enforcement self-test. Also self-heals on the native side by
+   * re-syncing the background guard service before reporting.
+   */
+  async getDiagnostics(): Promise<NativeDiagnostics | null> {
+    if (!isAndroid) return null;
+    try {
+      return await Plugin.getDiagnostics();
+    } catch (e) {
+      console.warn('[NightToRise bridge] getDiagnostics failed', e);
+      return null;
     }
   },
 };

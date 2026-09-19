@@ -45,7 +45,21 @@ export interface NightToRiseConfig {
   weekendSleepTime?: string | null;
   /** Alarm volume ramp length in seconds (mirrored to native prefs). */
   alarmRampSeconds?: number;
+  /** Which guards the user wants. Either, both, or one alone. */
+  sleepGuardEnabled: boolean;
+  riseGuardEnabled: boolean;
+  /**
+   * How Sleep Guard ends:
+   *  - 'until-alarm' → keeps holding right up to the rise alarm
+   *  - 'duration'    → switches itself off N minutes after it started
+   */
+  sleepGuardEndMode: 'until-alarm' | 'duration';
+  /** Minutes Sleep Guard runs when sleepGuardEndMode === 'duration'. */
+  sleepGuardDurationMinutes: number;
 }
+
+export type SleepGuardEndMode = NightToRiseConfig['sleepGuardEndMode'];
+
 
 /** Popular apps, used as a web fallback list inside the app picker. */
 export const SUGGESTED_BLOCK_APPS: AllowedApp[] = [
@@ -89,6 +103,10 @@ export const DEFAULT_CONFIG: NightToRiseConfig = {
   shiftTargetTime: null,
   weekendSleepTime: null,
   alarmRampSeconds: 45,
+  sleepGuardEnabled: true,
+  riseGuardEnabled: true,
+  sleepGuardEndMode: 'until-alarm',
+  sleepGuardDurationMinutes: 180,
 };
 
 /** SECTION 4 — strict mode commits the user for 24 hours. */

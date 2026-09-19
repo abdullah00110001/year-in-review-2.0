@@ -18,6 +18,15 @@ import java.util.Set;
  * just persist a timestamp here. The next time the JS layer is foregrounded,
  * it calls NightToRisePlugin.consumePendingBreak() to pick it up and reset
  * the streak correctly.
+ *
+ * FIX (v3): added the safety cap + emergency kill switch. See
+ * safetyCapHours()/emergencyDisable() below.
+ *
+ * FIX (v4): mirrors the four new independent-guard fields from
+ * NightToRiseConfig (types.ts): sleepGuardEnabled, riseGuardEnabled,
+ * sleepGuardEndMode, sleepGuardDurationMinutes. Lets the user run Sleep
+ * Guard and Rise Guard independently, and choose whether Sleep Guard ends
+ * at the Rise alarm or auto-releases after a fixed duration.
  */
 public class NightToRisePreferences {
     private static final String PREFS = "night_to_rise_prefs";
@@ -44,6 +53,16 @@ public class NightToRisePreferences {
     private static final String K_RAMP_SECONDS     = "alarmVolumeRampSeconds";  // SECTION 5
     private static final String K_CHRONOTYPE       = "chronotypeEstimate";      // SECTION 5
 
+    // NEW (v3) — safety cap, independent of alarm state.
+    private static final String K_SAFETY_CAP_HOURS = "safetyCapHours";
+    private static final int    DEFAULT_SAFETY_CAP_HOURS = 10;
+
+    // NEW (v4) — independent guard toggles + Sleep Guard end mode.
+    private static final String K_SLEEP_GUARD_ENABLED = "sleepGuardEnabled";
+    private static final String K_RISE_GUARD_ENABLED  = "riseGuardEnabled";
+    private static final String K_SLEEP_END_MODE      = "sleepGuardEndMode";       // "until-alarm" | "duration"
+    private static final String K_SLEEP_DURATION_MIN  = "sleepGuardDurationMinutes";
+
     private final SharedPreferences sp;
 
     public NightToRisePreferences(Context ctx) {
@@ -62,6 +81,16 @@ public class NightToRisePreferences {
         e.putBoolean(K_STRICT_MODE,      o.optBoolean("strictMode", false));
         e.putString (K_SLEEP_MSG,        o.optString("sleepBlockMessage", "Time to rest."));
         e.putString (K_RISE_MSG,         o.optString("riseBlockMessage", "Start your morning right."));
+        // NEW (v3): safety cap, in hours. Falls back to a sane default so
+        // existing configs saved before this field existed don't end up with 0.
+        e.putInt    (K_SAFETY_CAP_HOURS, o.optInt("safetyCapHours", DEFAULT_SAFETY_CAP_HOURS));
+
+        // NEW (v4): independent guard toggles + Sleep Guard end mode.
+        e.putBoolean(K_SLEEP_GUARD_ENABLED, o.optBoolean("sleepGuardEnabled", true));
+        e.putBoolean(K_RISE_GUARD_ENABLED,  o.optBoolean("riseGuardEnabled", true));
+        String endMode = o.optString("sleepGuardEndMode", "until-alarm");
+        e.putString (K_SLEEP_END_MODE, "duration".equals(endMode) ? "duration" : "until-alarm");
+        e.putInt    (K_SLEEP_DURATION_MIN, o.optInt("sleepGuardDurationMinutes", 180));
 
         JSONArray days = o.optJSONArray("scheduleDays");
         StringBuilder dCsv = new StringBuilder();
@@ -138,6 +167,18 @@ public class NightToRisePreferences {
     public int     alarmRampSeconds() { return sp.getInt(K_RAMP_SECONDS, 45); }
     public String  chronotype()       { return sp.getString(K_CHRONOTYPE, ""); }
 
+    /** NEW (v3): hard ceiling on how long Sleep Guard can run past its start,
+     *  even with no/expired alarm. Prevents an indefinite lockout. */
+    public int safetyCapHours() { return sp.getInt(K_SAFETY_CAP_HOURS, DEFAULT_SAFETY_CAP_HOURS); }
+
+    /** NEW (v4): whether each guard is independently active. Both default true. */
+    public boolean sleepGuardEnabled() { return sp.getBoolean(K_SLEEP_GUARD_ENABLED, true); }
+    public boolean riseGuardEnabled()  { return sp.getBoolean(K_RISE_GUARD_ENABLED, true); }
+    /** "until-alarm" (default) or "duration". */
+    public String  sleepGuardEndMode() { return sp.getString(K_SLEEP_END_MODE, "until-alarm"); }
+    /** Minutes Sleep Guard runs when sleepGuardEndMode() == "duration". Default 180 (3h). */
+    public int     sleepGuardDurationMinutes() { return sp.getInt(K_SLEEP_DURATION_MIN, 180); }
+
     public Set<Integer> scheduleDays() {
         Set<Integer> out = new HashSet<>();
         String csv = sp.getString(K_SCHEDULE_DAYS, "0,1,2,3,4,5,6");
@@ -180,6 +221,21 @@ public class NightToRisePreferences {
     /** Called by NightToRiseBlockActivity when the user taps "Emergency unlock". */
     public void recordPendingBreak() {
         sp.edit().putLong(K_PENDING_BREAK_TS, System.currentTimeMillis()).apply();
+    }
+
+    // ==========================================================
+    // NEW (v3): emergency kill switch
+    // ==========================================================
+    /**
+     * KILL SWITCH — the one write path in this entire feature that does not
+     * depend on JSON parsing, config validation, streak logic, or any other
+     * code that could itself be the reason someone gets stuck. Called only
+     * from the 7-tap gesture on the native block screen
+     * (NightToRiseBlockActivity). Deliberately as small and dependency-free
+     * as possible: it does exactly one thing, unconditionally.
+     */
+    public void emergencyDisable() {
+        sp.edit().putBoolean(K_ENABLED, false).apply();
     }
 
     // ==========================================================

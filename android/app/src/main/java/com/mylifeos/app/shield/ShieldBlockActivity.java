@@ -68,6 +68,7 @@ public class ShieldBlockActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        ShieldAccessibilityService.dismissBlockingOverlay();
 
         blockedPackage = getIntent().getStringExtra("BLOCKED_PACKAGE");
         boolean isAdultBlock = getIntent().getBooleanExtra("IS_ADULT_BLOCK", false);

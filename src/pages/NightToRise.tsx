@@ -44,6 +44,7 @@ import { NightArc } from '@/components/rise/night-to-rise/NightArc';
 import { NightToRiseInsights } from '@/components/rise/night-to-rise/NightToRiseInsights';
 import { InstalledAppPicker } from '@/components/rise/night-to-rise/InstalledAppPicker';
 import { NightToRisePermissions } from '@/components/rise/night-to-rise/NightToRisePermissions';
+import { NightToRiseSelfTest } from '@/components/rise/night-to-rise/NightToRiseSelfTest';
 import { ChronotypeOnboarding } from '@/components/rise/night-to-rise/ChronotypeOnboarding';
 import { SleepCoachNotes } from '@/components/rise/night-to-rise/SleepCoachNotes';
 import {
@@ -279,16 +280,32 @@ export default function NightToRisePage() {
 
             {/* ============================ SETUP ============================ */}
             <TabsContent value="setup" className="mt-4 space-y-5">
+              <NightToRisePermissions />
+              <NightToRiseSelfTest />
+
               <GroupLabel>Timing</GroupLabel>
 
               <Section icon={<Moon className="h-4 w-4" />} title="Sleep Guard" subtitle="Lock distracting apps before bed">
                 <div className="space-y-4">
+                  {/* NEW (v4): independent on/off — user can run Sleep Guard,
+                      Rise Guard, or both. */}
+                  <div className="flex items-center justify-between rounded-lg bg-muted/40 p-3">
+                    <div>
+                      <p className="text-sm font-medium">Sleep Guard on</p>
+                      <p className="text-xs text-muted-foreground">Lock apps in the evening/night</p>
+                    </div>
+                    <Switch
+                      checked={config.sleepGuardEnabled}
+                      disabled={strictLocked}
+                      onCheckedChange={(v) => update({ sleepGuardEnabled: v })}
+                    />
+                  </div>
                   <div>
                     <Label className="text-xs text-muted-foreground">Target sleep time</Label>
                     <Input
                       type="time"
                       value={config.sleepTime}
-                      disabled={strictLocked}
+                      disabled={strictLocked || !config.sleepGuardEnabled}
                       onChange={(e) => update({ sleepTime: e.target.value })}
                       className="n2r-mono mt-1 text-base"
                     />
@@ -297,18 +314,71 @@ export default function NightToRisePage() {
                     label="Lock starts before sleep"
                     value={config.sleepLockMinutesBefore}
                     min={0} max={120} step={5}
-                    disabled={strictLocked}
+                    disabled={strictLocked || !config.sleepGuardEnabled}
                     onChange={(v) => update({ sleepLockMinutesBefore: v })}
                   />
                   <p className="text-[11px] text-muted-foreground">
                     Wind-down begins at{' '}
                     <span className="n2r-mono">{formatClock(windows.sleepStart)}</span>.
                   </p>
+
+                  {/* NEW (v4): how Sleep Guard ends — either it runs straight
+                      through until the Rise alarm, or it auto-releases after a
+                      fixed duration (leaving a gap until Rise Guard starts at
+                      the alarm). */}
+                  <div className="space-y-2 border-t border-border pt-4">
+                    <Label className="text-xs text-muted-foreground">Sleep Guard ends</Label>
+                    <ToggleGroup
+                      type="single"
+                      value={config.sleepGuardEndMode}
+                      onValueChange={(v) => {
+                        if (v === 'until-alarm' || v === 'duration') update({ sleepGuardEndMode: v });
+                      }}
+                      disabled={strictLocked || !config.sleepGuardEnabled}
+                      className="grid grid-cols-2 gap-2"
+                    >
+                      <ToggleGroupItem value="until-alarm" className="text-xs">
+                        Until Rise alarm
+                      </ToggleGroupItem>
+                      <ToggleGroupItem value="duration" className="text-xs">
+                        Auto-off after a set time
+                      </ToggleGroupItem>
+                    </ToggleGroup>
+                    {config.sleepGuardEndMode === 'duration' && (
+                      <>
+                        <SliderRow
+                          label="Sleep Guard runs for"
+                          value={config.sleepGuardDurationMinutes}
+                          min={30} max={480} step={15}
+                          disabled={strictLocked || !config.sleepGuardEnabled}
+                          onChange={(v) => update({ sleepGuardDurationMinutes: v })}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          Sleep Guard turns off on its own{' '}
+                          {Math.round(config.sleepGuardDurationMinutes / 60 * 10) / 10}h after it starts —
+                          even if the Rise alarm hasn't gone off yet. Rise Guard still starts separately
+                          when the alarm fires.
+                        </p>
+                      </>
+                    )}
+                  </div>
                 </div>
               </Section>
 
               <Section icon={<Sunrise className="h-4 w-4" />} title="Rise Guard" subtitle="Stay off the feed after waking">
                 <div className="space-y-4">
+                  {/* NEW (v4): independent on/off. */}
+                  <div className="flex items-center justify-between rounded-lg bg-muted/40 p-3">
+                    <div>
+                      <p className="text-sm font-medium">Rise Guard on</p>
+                      <p className="text-xs text-muted-foreground">Lock apps after the alarm rings</p>
+                    </div>
+                    <Switch
+                      checked={config.riseGuardEnabled}
+                      disabled={strictLocked}
+                      onCheckedChange={(v) => update({ riseGuardEnabled: v })}
+                    />
+                  </div>
                   <div className="n2r-row justify-between">
                     <span className="text-sm">Alarm time</span>
                     <span className="n2r-mono text-sm font-semibold text-warning">
@@ -319,7 +389,7 @@ export default function NightToRisePage() {
                     label="Lock stays for"
                     value={config.riseLockMinutesAfter}
                     min={5} max={120} step={5}
-                    disabled={strictLocked}
+                    disabled={strictLocked || !config.riseGuardEnabled}
                     onChange={(v) => update({ riseLockMinutesAfter: v })}
                   />
                   <div className="flex items-center justify-between rounded-lg bg-muted/40 p-3">
@@ -713,3 +783,5 @@ function SliderRow({
     </div>
   );
 }
+
+

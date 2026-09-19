@@ -172,6 +172,7 @@ public class ShieldPlugin extends Plugin {
                 apps.add(appsArray.getString(i));
             }
             preferences.setBlockedApps(apps);
+            com.mylifeos.app.shield.core.ForegroundGuardService.sync(getContext());
             call.resolve();
         } catch (Exception e) {
             call.reject("Failed to update block list", e);
@@ -216,9 +217,45 @@ public class ShieldPlugin extends Plugin {
             Set<String> set = new HashSet<>();
             for (int i = 0; i < arr.length(); i++) set.add(arr.getString(i));
             preferences.setBlockedKeywords(set);
+            com.mylifeos.app.shield.ShieldAccessibilityService.refreshContentConfiguration();
             call.resolve();
         } catch (Exception e) {
             call.reject("Failed to update keywords", e);
+        }
+    }
+
+    // ==========================================
+    // 💬 TELEGRAM GUARD
+    // ==========================================
+    private static final String[] TELEGRAM_OPTION_KEYS = new String[]{
+        "enabled", "blockChats", "blockSearch", "blockInviteLinks",
+        "blockAllInvites", "blockMedia", "blockAllMedia"
+    };
+
+    @PluginMethod
+    public void getTelegramGuard(PluginCall call) {
+        JSObject ret = new JSObject();
+        for (String key : TELEGRAM_OPTION_KEYS) {
+            ret.put(key, preferences.getTelegramGuardOption(key));
+        }
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void setTelegramGuard(PluginCall call) {
+        try {
+            for (String key : TELEGRAM_OPTION_KEYS) {
+                Boolean value = call.getBoolean(key);
+                if (value != null) preferences.setTelegramGuardOption(key, value);
+            }
+            com.mylifeos.app.shield.ShieldAccessibilityService.refreshContentConfiguration();
+            JSObject ret = new JSObject();
+            for (String key : TELEGRAM_OPTION_KEYS) {
+                ret.put(key, preferences.getTelegramGuardOption(key));
+            }
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Failed to update Telegram Guard settings", e);
         }
     }
 
