@@ -101,7 +101,15 @@ public class NightToRiseManager {
                 if (r.activityInfo != null) out.add(r.activityInfo.packageName);
             }
         } catch (Throwable ignored) {}
-        return out;
+        safetyCache = java.util.Collections.unmodifiableSet(out);
+        safetyCacheAt = android.os.SystemClock.elapsedRealtime();
+        return safetyCache;
+    }
+
+    /** Drop the cached launcher/SMS/dialer exemptions (config changed, boot, etc.). */
+    public static void invalidateSafetyCache() {
+        safetyCache = null;
+        safetyCacheAt = 0L;
     }
 
 
