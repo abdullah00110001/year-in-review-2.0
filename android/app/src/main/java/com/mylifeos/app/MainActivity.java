@@ -117,7 +117,7 @@ public class MainActivity extends BridgeActivity {
     super.onCreate(savedInstanceState);
     instance = this;
     // Make sure blocking enforcement + its status notification are running.
-    try { com.mylifeos.app.shield.core.ForegroundGuardService.sync(this); }
+    try { com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(this); }
     catch (Throwable t) { Log.e("MainActivity", "guard sync failed", t); }
     // 🔔 Create FCM wake-up notification channel before push payload arrives
     try { ensureWakeUpChannel(); } catch (Throwable t) { Log.e("MainActivity", "ensureWakeUpChannel failed", t); }

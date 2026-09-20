@@ -42,7 +42,7 @@ public class BootReceiver extends BroadcastReceiver {
         Log.d(TAG, "Boot/replace detected (" + action + ") → restoring alarms");
 
         // Blocking must survive reboots too, not just alarms.
-        try { com.mylifeos.app.shield.core.ForegroundGuardService.sync(context); }
+        try { com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(context); }
         catch (Throwable t) { Log.w(TAG, "guard sync failed", t); }
 
         int restored = 0, dropped = 0, failed = 0;

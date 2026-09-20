@@ -107,7 +107,7 @@ public class NightToRisePlugin extends Plugin {
         // Self-heal: make sure the poll service is running when it should be.
         boolean synced = false;
         try {
-            com.mylifeos.app.shield.core.ForegroundGuardService.sync(ctx);
+            com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(ctx);
             synced = true;
         } catch (Throwable ignored) {}
 
