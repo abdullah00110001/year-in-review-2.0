@@ -46,7 +46,27 @@ public class NightToRiseManager {
      * default SMS app, the default dialer, and every launcher that could ever
      * be the home-screen handler on this device.
      */
+    /**
+     * SAFETY-CRITICAL (device reboot): this resolution does 3+ PackageManager
+     * binder calls (including queryIntentActivities, which returns every
+     * launcher on the device). decide() is called once per second by the guard
+     * service AND on every accessibility event, so it was issuing hundreds of
+     * PackageManager transactions per second into system_server — a binder
+     * flood that trips the system_server watchdog and restarts the phone.
+     *
+     * The result only changes when the user swaps their launcher / default SMS
+     * / default dialer, so it is cached process-wide for 10 minutes.
+     */
+    private static final long SAFETY_CACHE_TTL_MS = 10L * 60 * 1000;
+    private static volatile java.util.Set<String> safetyCache = null;
+    private static volatile long safetyCacheAt = 0L;
+
     private java.util.Set<String> safetyPackages() {
+        java.util.Set<String> cached = safetyCache;
+        if (cached != null
+            && android.os.SystemClock.elapsedRealtime() - safetyCacheAt < SAFETY_CACHE_TTL_MS) {
+            return cached;
+        }
         java.util.Set<String> out = new java.util.HashSet<>();
         try {
             String sms = android.provider.Telephony.Sms.getDefaultSmsPackage(appCtx);
