@@ -74,6 +74,17 @@ public class ForegroundGuardService extends Service {
     /** True between onCreate and onDestroy of the running instance. */
     private static volatile boolean running = false;
 
+    /**
+     * Explicit, user-driven state change (settings saved, alarm changed, boot):
+     * bypass the rate limit so the guard starts/stops immediately.
+     */
+    public static void forceSync(Context ctx) {
+        lastSyncAt = 0L;
+        lastSyncNeeded = null;
+        com.mylifeos.app.nighttorise.NightToRiseManager.invalidateSafetyCache();
+        sync(ctx);
+    }
+
     public static void sync(Context ctx) {
         long now = android.os.SystemClock.elapsedRealtime();
         if (lastSyncNeeded != null && now - lastSyncAt < SYNC_MIN_INTERVAL_MS) return;
