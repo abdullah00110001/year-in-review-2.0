@@ -172,7 +172,7 @@ public class ShieldPlugin extends Plugin {
                 apps.add(appsArray.getString(i));
             }
             preferences.setBlockedApps(apps);
-            com.mylifeos.app.shield.core.ForegroundGuardService.sync(getContext());
+            com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(getContext());
             call.resolve();
         } catch (Exception e) {
             call.reject("Failed to update block list", e);

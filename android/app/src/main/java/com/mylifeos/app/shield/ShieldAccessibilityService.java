@@ -60,6 +60,25 @@ public class ShieldAccessibilityService extends AccessibilityService {
     private static final long CONTENT_ENFORCE_THROTTLE_MS = 400;
     private final java.util.HashMap<String, Long> lastContentEnforceAt = new java.util.HashMap<>();
 
+    /**
+     * Rate-limits the PureShield foreground signal: at most one per package
+     * change, and never more than one every 1.5s for the same package.
+     */
+    private static final long PURESHIELD_SIGNAL_THROTTLE_MS = 1500;
+    private String lastPureShieldPkg = null;
+    private long lastPureShieldSignalAt = 0L;
+
+    private boolean allowPureShieldSignal(String pkg) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (pkg != null && pkg.equals(lastPureShieldPkg)
+            && now - lastPureShieldSignalAt < PURESHIELD_SIGNAL_THROTTLE_MS) {
+            return false;
+        }
+        lastPureShieldPkg = pkg;
+        lastPureShieldSignalAt = now;
+        return true;
+    }
+
     private boolean allowContentEnforce(String pkg) {
         long now = android.os.SystemClock.elapsedRealtime();
         Long prev = lastContentEnforceAt.get(pkg);
@@ -393,9 +412,17 @@ public class ShieldAccessibilityService extends AccessibilityService {
         }
 
         // PureShield foreground signal
-        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        //
+        // SAFETY-CRITICAL (device reboot): this fired startService() for EVERY
+        // window-content and scroll event — dozens of ActivityManager binder
+        // transactions per second while simply scrolling a feed. Combined with
+        // the guard-service sync above it flooded system_server, whose watchdog
+        // then restarts it (indistinguishable from a phone reboot). The signal
+        // only carries a package name, so send it on real changes only.
+        if ((type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             || type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            || type == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            || type == AccessibilityEvent.TYPE_VIEW_SCROLLED)
+            && allowPureShieldSignal(packageName)) {
             try {
                 com.mylifeos.app.shield.vision.PureShieldService svc =
                     com.mylifeos.app.shield.vision.PureShieldService.instance;

@@ -37,7 +37,7 @@ public class NightToRisePlugin extends Plugin {
         if (json == null) { call.reject("json required"); return; }
         try {
             new NightToRisePreferences(getContext()).saveJsonConfig(json);
-            com.mylifeos.app.shield.core.ForegroundGuardService.sync(getContext());
+            com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(getContext());
             call.resolve();
         } catch (Exception t) {
             call.reject("setConfig failed: " + t.getMessage(), t);
@@ -48,7 +48,7 @@ public class NightToRisePlugin extends Plugin {
     public void setRiseAlarm(PluginCall call) {
         long ms = call.getLong("epochMillis", 0L);
         new NightToRisePreferences(getContext()).saveRiseAlarmMillis(ms);
-        com.mylifeos.app.shield.core.ForegroundGuardService.sync(getContext());
+        com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(getContext());
         call.resolve();
     }
 
@@ -107,7 +107,7 @@ public class NightToRisePlugin extends Plugin {
         // Self-heal: make sure the poll service is running when it should be.
         boolean synced = false;
         try {
-            com.mylifeos.app.shield.core.ForegroundGuardService.sync(ctx);
+            com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(ctx);
             synced = true;
         } catch (Throwable ignored) {}
 

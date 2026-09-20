@@ -55,7 +55,39 @@ public class ForegroundGuardService extends Service {
     private Runnable tick;
     private String lastNotificationText = null;
 
+    /**
+     * SAFETY-CRITICAL (device reboot): sync() was called from
+     * onAccessibilityEvent, i.e. several times per second while the user
+     * scrolls or switches apps. Each call issued a
+     * startForegroundService()/stopService() binder transaction to
+     * ActivityManager in system_server, and each one also re-read
+     * SharedPreferences. On OEM ROMs that flood of service-start transactions
+     * trips the system_server watchdog, which restarts system_server — on the
+     * device this looks exactly like the phone rebooting on its own.
+     *
+     * sync() is now idempotent and cheap: it starts/stops only on a real state
+     * change, and never more than once every SYNC_MIN_INTERVAL_MS.
+     */
+    private static final long SYNC_MIN_INTERVAL_MS = 5000L;
+    private static volatile long lastSyncAt = 0L;
+    private static volatile Boolean lastSyncNeeded = null;
+    /** True between onCreate and onDestroy of the running instance. */
+    private static volatile boolean running = false;
+
+    /**
+     * Explicit, user-driven state change (settings saved, alarm changed, boot):
+     * bypass the rate limit so the guard starts/stops immediately.
+     */
+    public static void forceSync(Context ctx) {
+        lastSyncAt = 0L;
+        lastSyncNeeded = null;
+        com.mylifeos.app.nighttorise.NightToRiseManager.invalidateSafetyCache();
+        sync(ctx);
+    }
+
     public static void sync(Context ctx) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastSyncNeeded != null && now - lastSyncAt < SYNC_MIN_INTERVAL_MS) return;
         try {
             com.mylifeos.app.nighttorise.NightToRisePreferences n2rPrefs =
                 new com.mylifeos.app.nighttorise.NightToRisePreferences(ctx);
@@ -63,11 +95,19 @@ public class ForegroundGuardService extends Service {
             Set<String> blocked = new ShieldPreferences(ctx).getBlockedApps();
             boolean shieldOn = blocked != null && !blocked.isEmpty();
             boolean needed = n2rOn || shieldOn;
+            lastSyncAt = now;
+
+            // Nothing to do: desired state already matches reality.
+            if (lastSyncNeeded != null && lastSyncNeeded == needed && running == needed) return;
+            lastSyncNeeded = needed;
+
             Intent i = new Intent(ctx, ForegroundGuardService.class);
             if (needed) {
+                if (running) return;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ctx.startForegroundService(i);
                 else ctx.startService(i);
             } else {
+                if (!running) return;
                 ctx.stopService(i);
             }
         } catch (Throwable t) {
@@ -78,6 +118,7 @@ public class ForegroundGuardService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        running = true;
         createChannel();
         startForeground(NOTIF_ID, buildNotification("Protection active", "Checking your lock schedule…"));
         tick = new Runnable() {
@@ -96,6 +137,8 @@ public class ForegroundGuardService extends Service {
 
     @Override
     public void onDestroy() {
+        running = false;
+        lastSyncNeeded = null;
         if (tick != null) handler.removeCallbacks(tick);
         super.onDestroy();
     }
