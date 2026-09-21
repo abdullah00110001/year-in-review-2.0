@@ -264,8 +264,12 @@ public class ShieldAccessibilityService extends AccessibilityService {
         try { loadMonitoredApps(); }          catch (Throwable t) { Log.w(TAG, "monitored", t); }
         try { refreshResolvedBrowserPackages(); } catch (Throwable t) { Log.w(TAG, "browsers", t); }
         try { registerPackageAddedReceiver(); } catch (Throwable t) { Log.w(TAG, "receiver", t); }
-        try { com.mylifeos.app.shield.core.ForegroundGuardService.sync(this); }
+        // Service just connected: apply the real state immediately instead of
+        // waiting out the throttle window in sync().
+        try { com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(this); }
         catch (Throwable t) { Log.w(TAG, "guard sync", t); }
+        try { com.mylifeos.app.nighttorise.NightToRiseManager.invalidateSafetyCache(); }
+        catch (Throwable ignored) {}
         Log.d(TAG, "🛡️ Shield Connected — keywords: " + adultKeywordsSet.size()
             + ", sites: " + adultSitesList.size()
             + ", browsers: " + getAllBrowserPackages().size());
