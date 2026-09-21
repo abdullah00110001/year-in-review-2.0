@@ -107,6 +107,14 @@ export interface NightWindowInput {
   sleepEndMode?: 'until-alarm' | 'duration';
   /** Minutes Sleep Guard runs in 'duration' mode. */
   sleepDurationMin?: number;
+  /** Weekdays (0=Sun) the alarm rings on. Empty = every day. */
+  riseDays?: number[];
+  /**
+   * Hard ceiling (minutes) on Sleep Guard when no alarm is attached. Measured
+   * from the LOCK START, exactly like native enforcement, so the on-screen
+   * countdown and the phone's behaviour can never drift apart.
+   */
+  safetyCapMinutes?: number;
 }
 
 

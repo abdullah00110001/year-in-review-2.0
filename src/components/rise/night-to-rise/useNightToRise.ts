@@ -11,6 +11,7 @@ import {
 } from './types';
 import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
 import { computeNightWindows, relevantAlarmOccurrenceMs } from './timeMath';
+import type { NextRiseAlarm } from './nextRiseAlarm';
 
 function load(): NightToRiseConfig {
   try {
