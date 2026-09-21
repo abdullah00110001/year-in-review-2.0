@@ -78,6 +78,13 @@ export interface ShieldPluginInterface {
     customMessage: string;
   }): Promise<{ success: boolean }>;
   getAdultFilterScreen(): Promise<{ style: string; customMessage: string }>;
+  // [SHIELD-CARD] Block Screen Style -> native block card
+  updateBlockScreenOptions(options: {
+    countdown?: boolean;
+    theme?: string;
+    text?: string;
+  }): Promise<{ success: boolean }>;
+  getBlockScreenOptions(): Promise<{ countdown: boolean; theme: string; text: string }>;
 
   // 🔑 Emergency Bypass & Light Orb Timer
   setEmergencyPin(options: { pin: string }): Promise<void>;

@@ -306,6 +306,25 @@ public class ShieldPreferences {
     public int getTimerY() { return prefs.getInt("timer_y", 100); }
     public void setTimerPosition(int x, int y) { prefs.edit().putInt("timer_x", x).putInt("timer_y", y).apply(); }
     // 🎨 Adult Filter — Block Screen Style
+// [SHIELD-CARD] Block card options, synced from the "Block Screen Style" page
+public boolean isBlockCountdownEnabled() {
+    return prefs.getBoolean("block_countdown_enabled", true);
+}
+public void setBlockCountdownEnabled(boolean enabled) {
+    prefs.edit().putBoolean("block_countdown_enabled", enabled).apply();
+}
+public String getBlockScreenTheme() {
+    return prefs.getString("block_screen_theme", "");
+}
+public void setBlockScreenTheme(String theme) {
+    prefs.edit().putString("block_screen_theme", theme == null ? "" : theme).apply();
+}
+public String getBlockScreenText() {
+    return prefs.getString("block_screen_text", "");
+}
+public void setBlockScreenText(String text) {
+    prefs.edit().putString("block_screen_text", text == null ? "" : text).apply();
+}
 public String getAdultBlockScreenStyle() {
     return prefs.getString("adult_block_style", "focus");
 }

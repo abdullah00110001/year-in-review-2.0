@@ -38,6 +38,8 @@ public class ShieldAccessibilityService extends AccessibilityService {
     private ShieldTimerManager timerManager;
 
 
+    /** [SHIELD-CARD] "keyword" for user-defined keywords, otherwise "adult". */
+    private volatile String pendingBlockKind = "adult";
     private String lastBlockedUrl = "";
     private long lastScanTime = 0;
 
@@ -153,6 +155,12 @@ public class ShieldAccessibilityService extends AccessibilityService {
     }
 
     public static void dismissBlockingOverlay() { BlockingOverlay.hide(); }
+
+    /** [SHIELD-CARD] Draws the shared Shield block card as an accessibility overlay. */
+    public static boolean showShieldCard(com.mylifeos.app.shield.core.ShieldBlockCard.Spec spec, Runnable onHome) {
+        ShieldAccessibilityService svc = instance;
+        return svc != null && BlockingOverlay.showCard(svc, spec, onHome);
+    }
 
     public static void refreshContentConfiguration() {
         ShieldAccessibilityService svc = instance;
@@ -757,6 +765,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
                 firewall.blockApp(packageName, blockDurationMs);
             }
 
+            pendingBlockKind = classifyBlockKind(reason);
             new Handler(Looper.getMainLooper()).postDelayed(
                 () -> showBlockScreen(packageName, true), 150);
             return;
@@ -781,6 +790,22 @@ public class ShieldAccessibilityService extends AccessibilityService {
         triggerAdultBlock(reason, null);
     }
 
+    /** [SHIELD-CARD] User-defined keyword reasons all start with "Custom". */
+    private static String classifyBlockKind(String reason) {
+        if (reason == null) return "adult";
+        return reason.toLowerCase(java.util.Locale.ROOT).startsWith("custom") ? "keyword" : "adult";
+    }
+
+    /** [SHIELD-CARD] Overlay-first; falls back to the activity inside BlockEnforcer.presentShield. */
+    private void presentBlock(Intent intent) {
+        try {
+            com.mylifeos.app.shield.core.BlockEnforcer.presentShield(this, intent, null);
+        } catch (Throwable t) {
+            Log.w(TAG, "presentShield failed, starting activity", t);
+            try { startActivity(intent); } catch (Throwable ignored) {}
+        }
+    }
+
     // ==========================================
     // Block Screens
     // ==========================================
@@ -788,11 +813,12 @@ public class ShieldAccessibilityService extends AccessibilityService {
         Intent intent = new Intent(this, ShieldBlockActivity.class);
         if (packageName != null) intent.putExtra("BLOCKED_PACKAGE", packageName);
         intent.putExtra("IS_ADULT_BLOCK", isAdultBlock);
+        intent.putExtra("BLOCK_KIND", pendingBlockKind);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
             Intent.FLAG_ACTIVITY_CLEAR_TOP |
             Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS |
             Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        startActivity(intent);
+        presentBlock(intent);
     }
 
     private void showEscalationBlockScreen(String packageName, long remainingMs) {
@@ -808,7 +834,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
                 Intent.FLAG_ACTIVITY_CLEAR_TOP |
                 Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS |
                 Intent.FLAG_ACTIVITY_NO_ANIMATION);
-            startActivity(intent);
+            presentBlock(intent);
         }, 150);
     }
 

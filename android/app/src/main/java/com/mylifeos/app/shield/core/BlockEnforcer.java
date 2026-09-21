@@ -233,9 +233,8 @@ public final class BlockEnforcer {
                         | Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-                    boolean shown = launchBlockScreen(ctx, intent, "Shield is protecting your focus",
-                        "This app is blocked right now.", false, false, leaveApp);
-                    if (!shown) leave(leaveApp);
+                    // [SHIELD-CARD] overlay first; the activity is used only if no overlay can be drawn.
+                    presentShield(ctx, intent, leaveApp);
                 } else if (!isBlockScreenForeground()) {
                     leave(leaveApp);
                 }
@@ -281,6 +280,73 @@ public final class BlockEnforcer {
         String foreground = lastForegroundPackage();
         return foreground != null
             && (foreground.contains("ShieldBlock") || foreground.contains("NightToRise"));
+    }
+
+    /**
+     * [SHIELD-CARD] Shield block presentation. Strict order, never two at once, no timers:
+     *   1. accessibility overlay  (instant; not subject to background-launch limits)
+     *   2. system overlay         (needs only "Display over other apps")
+     *   3. ShieldBlockActivity    (only when no overlay could be drawn)
+     *   4. full-screen notification
+     * Sleep to Rise keeps using launchBlockScreen() below, unchanged.
+     */
+    public static boolean presentShield(Context ctx, Intent blockIntent, Runnable leaveApp) {
+        lastBlockAt = System.currentTimeMillis();
+        lastBlockedPkg = blockIntent.getStringExtra("BLOCKED_PACKAGE");
+
+        ShieldBlockCard.Spec spec = null;
+        try {
+            spec = ShieldBlockCard.Spec.fromIntent(ctx, blockIntent, false);
+        } catch (Throwable t) {
+            Log.w(TAG, "block card spec failed", t);
+        }
+
+        final Context appCtx = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
+        final Runnable goHome = () -> {
+            if (com.mylifeos.app.shield.ShieldAccessibilityService.goHomeViaAccessibility()) return;
+            try {
+                Intent home = new Intent(Intent.ACTION_MAIN);
+                home.addCategory(Intent.CATEGORY_HOME);
+                home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                appCtx.startActivity(home);
+            } catch (Throwable t) {
+                Log.w(TAG, "goHome intent rejected", t);
+            }
+        };
+
+        if (spec != null) {
+            boolean drawn = false;
+            try {
+                drawn = com.mylifeos.app.shield.ShieldAccessibilityService.showShieldCard(spec, goHome);
+                if (!drawn) drawn = BlockingOverlay.showCardSystem(ctx, spec, goHome);
+            } catch (Throwable t) {
+                Log.w(TAG, "block card overlay failed", t);
+            }
+            if (drawn) {
+                lastError = null;
+                leave(leaveApp);
+                return true;
+            }
+        }
+
+        if (com.mylifeos.app.shield.ShieldAccessibilityService.launchBlockActivity(blockIntent)) {
+            lastError = null;
+            return true;
+        }
+        if (canStartActivityFromBackground(ctx)) {
+            try {
+                ctx.startActivity(blockIntent);
+                lastError = null;
+                return true;
+            } catch (Throwable t) {
+                Log.w(TAG, "startActivity for block screen rejected", t);
+                lastError = "startActivity rejected: " + t.getMessage();
+            }
+        }
+        boolean shown = showFullScreenFallback(ctx, blockIntent,
+            "Shield is protecting your focus", "This app is blocked right now.");
+        if (!shown) leave(leaveApp);
+        return shown;
     }
 
     private static boolean launchBlockScreen(Context ctx, Intent i, String title, String body,

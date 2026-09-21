@@ -363,6 +363,33 @@ public class ShieldPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    // [SHIELD-CARD] Block Screen Style page -> native block card
+    @PluginMethod
+    public void updateBlockScreenOptions(PluginCall call) {
+        try {
+            Boolean countdown = call.getBoolean("countdown");
+            if (countdown != null) preferences.setBlockCountdownEnabled(countdown);
+            String theme = call.getString("theme");
+            if (theme != null) preferences.setBlockScreenTheme(theme);
+            String text = call.getString("text");
+            if (text != null) preferences.setBlockScreenText(text);
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void getBlockScreenOptions(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("countdown", preferences.isBlockCountdownEnabled());
+        ret.put("theme", preferences.getBlockScreenTheme());
+        ret.put("text", preferences.getBlockScreenText());
+        call.resolve(ret);
+    }
+
     // ==========================================
     // ⚙️ SETTINGS & PROTECTION
     // ==========================================
