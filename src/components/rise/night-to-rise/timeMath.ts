@@ -107,6 +107,14 @@ export interface NightWindowInput {
   sleepEndMode?: 'until-alarm' | 'duration';
   /** Minutes Sleep Guard runs in 'duration' mode. */
   sleepDurationMin?: number;
+  /** Weekdays (0=Sun) the alarm rings on. Empty = every day. */
+  riseDays?: number[];
+  /**
+   * Hard ceiling (minutes) on Sleep Guard when no alarm is attached. Measured
+   * from the LOCK START, exactly like native enforcement, so the on-screen
+   * countdown and the phone's behaviour can never drift apart.
+   */
+  safetyCapMinutes?: number;
 }
 
 
@@ -137,8 +145,8 @@ export interface NightWindows {
 
 /**
  * Computes every Sleep-to-Rise time value from one consistent model.
- * When no rise alarm is set, the sleep window falls back to a 9h 30m span so
- * the UI still has a sane end point.
+ * With no rise alarm, Sleep Guard ends at the safety cap measured from the
+ * LOCK START — the same rule native enforcement applies.
  */
 export function computeNightWindows({
   sleepTime,
@@ -150,21 +158,24 @@ export function computeNightWindows({
   riseGuardEnabled = true,
   sleepEndMode = 'until-alarm',
   sleepDurationMin = 180,
+  riseDays = [],
+  safetyCapMinutes = 600,
 }: NightWindowInput): NightWindows {
   const nowMin = minutesOfDay(now);
   const sleepTarget = parseHM(sleepTime);
   const sleepStart = norm(sleepTarget - lockBeforeMin);
 
   const alarm = riseTime ? parseHM(riseTime) : null;
-  // Sleep Guard runs from the wind-down start until the alarm (or a 9h30m
-  // fallback when there is no alarm) — unless the user asked it to switch
-  // itself off after a fixed duration, in which case it ends at whichever
-  // comes first: that duration, or the alarm.
-  const untilAlarmEnd = alarm !== null ? alarm : norm(sleepTarget + 570);
+  // Sleep Guard runs from the wind-down start until the alarm (or the safety
+  // cap, counted from the lock start, when there is no alarm) — unless the
+  // user asked it to switch itself off after a fixed duration, in which case
+  // it ends at whichever comes first: that duration, or the alarm.
+  const cap = Math.max(60, Math.round(safetyCapMinutes));
+  const untilAlarmEnd = alarm !== null ? alarm : norm(sleepStart + cap);
   let sleepEnd = untilAlarmEnd;
   if (sleepEndMode === 'duration') {
     const duration = Math.max(15, Math.round(sleepDurationMin));
-    const alarmSpan = alarm !== null ? windowSpan(sleepStart, alarm) : Number.POSITIVE_INFINITY;
+    const alarmSpan = alarm !== null ? windowSpan(sleepStart, alarm) : cap;
     sleepEnd = duration < alarmSpan ? norm(sleepStart + duration) : untilAlarmEnd;
   }
 
@@ -172,8 +183,10 @@ export function computeNightWindows({
   const riseEnd = alarm !== null ? norm(alarm + lockAfterMin) : null;
 
   const sleepActive = sleepGuardEnabled && inWindow(nowMin, sleepStart, sleepEnd);
+  // Rise Guard only exists on mornings the alarm actually rings.
+  const alarmRingsToday = riseDays.length === 0 || riseDays.includes(now.getDay());
   const riseActive =
-    riseGuardEnabled && riseStart !== null && riseEnd !== null && lockAfterMin > 0
+    riseGuardEnabled && alarmRingsToday && riseStart !== null && riseEnd !== null && lockAfterMin > 0
       ? inWindow(nowMin, riseStart, riseEnd)
       : false;
 

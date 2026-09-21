@@ -11,6 +11,7 @@ import {
 } from './types';
 import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
 import { computeNightWindows, relevantAlarmOccurrenceMs } from './timeMath';
+import type { NextRiseAlarm } from './nextRiseAlarm';
 
 function load(): NightToRiseConfig {
   try {
@@ -29,7 +30,13 @@ const STRICT_ALLOWED_KEYS = new Set<keyof NightToRiseConfig>([
   'strictMode',
 ]);
 
-export function useNightToRise(riseAlarmTime?: string | null) {
+/**
+ * @param riseAlarm the nearest upcoming alarm (weekday-aware) from
+ * useNextRiseAlarm(). This hook is the ONLY writer of the alarm reference that
+ * native enforcement reads, so the two can never disagree.
+ */
+export function useNightToRise(riseAlarm?: NextRiseAlarm | null) {
+  const riseAlarmTime = riseAlarm?.time ?? null;
   const [config, setConfig] = useState<NightToRiseConfig>(load);
   const [now, setNow] = useState(new Date());
 
@@ -78,16 +85,24 @@ export function useNightToRise(riseAlarmTime?: string | null) {
   // Push current config to native once on mount (after restart).
   useEffect(() => { void nightToRiseBridge.setConfig(config); /* eslint-disable-next-line */ }, []);
 
-  // Keep the native scheduler aware of the next rise-alarm occurrence.
+  // Keep the native scheduler aware of the next rise-alarm occurrence AND of
+  // the weekdays that alarm actually rings on, so Rise Guard never locks the
+  // phone on a morning with no alarm.
+  const alarmDaysKey = (riseAlarm?.daysOfWeek ?? []).join(',');
   useEffect(() => {
     if (!riseAlarmTime) {
-      void nightToRiseBridge.setRiseAlarm(0);
+      void nightToRiseBridge.setRiseAlarm(0, []);
       return;
     }
+    const days = alarmDaysKey ? alarmDaysKey.split(',').map(Number) : [];
     void nightToRiseBridge.setRiseAlarm(
-      relevantAlarmOccurrenceMs(riseAlarmTime, config.riseLockMinutesAfter, now),
+      riseAlarm?.atMs && riseAlarm.atMs > 0
+        ? riseAlarm.atMs
+        : relevantAlarmOccurrenceMs(riseAlarmTime, config.riseLockMinutesAfter, now),
+      days,
     );
-  }, [riseAlarmTime, config.riseLockMinutesAfter, now]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riseAlarmTime, riseAlarm?.atMs, alarmDaysKey, config.riseLockMinutesAfter]);
 
   /** The target actually enforced tonight (gradual-shift aware). */
   const effectiveSleepTime = config.shiftTargetTime || config.sleepTime;
@@ -106,10 +121,15 @@ export function useNightToRise(riseAlarmTime?: string | null) {
       riseGuardEnabled: config.riseGuardEnabled,
       sleepEndMode: config.sleepGuardEndMode,
       sleepDurationMin: config.sleepGuardDurationMinutes,
+      // Weekdays the alarm rings on, and the same safety cap native uses, so
+      // the countdown on screen can never drift from real enforcement.
+      riseDays: riseAlarm?.daysOfWeek ?? [],
+      safetyCapMinutes: Math.max(60, (config.safetyCapHours ?? 10) * 60),
     }),
     [
       effectiveSleepTime, riseAlarmTime, config.sleepLockMinutesBefore, config.riseLockMinutesAfter, now,
       config.sleepGuardEnabled, config.riseGuardEnabled, config.sleepGuardEndMode, config.sleepGuardDurationMinutes,
+      config.safetyCapHours, riseAlarm?.daysOfWeek,
     ],
   );
 
