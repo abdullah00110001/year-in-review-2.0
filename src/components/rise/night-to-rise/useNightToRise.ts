@@ -29,7 +29,13 @@ const STRICT_ALLOWED_KEYS = new Set<keyof NightToRiseConfig>([
   'strictMode',
 ]);
 
-export function useNightToRise(riseAlarmTime?: string | null) {
+/**
+ * @param riseAlarm the nearest upcoming alarm (weekday-aware) from
+ * useNextRiseAlarm(). This hook is the ONLY writer of the alarm reference that
+ * native enforcement reads, so the two can never disagree.
+ */
+export function useNightToRise(riseAlarm?: NextRiseAlarm | null) {
+  const riseAlarmTime = riseAlarm?.time ?? null;
   const [config, setConfig] = useState<NightToRiseConfig>(load);
   const [now, setNow] = useState(new Date());
 
