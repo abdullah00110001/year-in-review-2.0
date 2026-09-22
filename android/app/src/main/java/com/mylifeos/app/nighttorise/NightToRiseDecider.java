@@ -34,8 +34,8 @@ public final class NightToRiseDecider {
 
     public enum Phase { OFF, ARMED, SLEEP_LOCK, RISE_LOCK, PAUSED, INACTIVE_DAY }
 
-    /** Fallback lock duration when no rise alarm is configured (9.5 hours). */
-    public static final int DEFAULT_MAX_LOCK_MINUTES = 570;
+    /** Fallback lock duration when no rise alarm is configured (spec: 10 hours). */
+    public static final int DEFAULT_MAX_LOCK_MINUTES = 600;
 
     /** A sleep window can never span longer than this (18 hours). */
     static final long MAX_WINDOW_MS = 18L * 60 * 60 * 1000;
@@ -70,6 +70,12 @@ public final class NightToRiseDecider {
         public int     sleepBeforeMin = 30;
         public int     riseAfterMin = 30;
         public long    riseAlarmMs;
+        /**
+         * Weekdays (0=Sun..6=Sat) the rise alarm rings on. EMPTY means daily.
+         * Without this the alarm's clock time was repeated every morning, so
+         * Rise Guard locked the phone on days with no alarm at all.
+         */
+        public Set<Integer> riseAlarmDays = new HashSet<>();
         public String  scheduleMode = "everyday";
         public Set<Integer> scheduleDays = new HashSet<>();
         /** The ONLY packages the user may foreground during a lock window. */
