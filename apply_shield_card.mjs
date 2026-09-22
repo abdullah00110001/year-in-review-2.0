@@ -887,8 +887,11 @@ public final class ShieldBlockCard {
             boolean compact = !land && (H / d) < 640f;
             boolean hasVis = spec.kind != Kind.CONTENT;
 
-            addView(new BackdropView(ctx, spec),
-                new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+            // [SHIELD-CARD] No backdrop layer: the window itself is translucent (set by the
+            // overlay/activity host), so only the floating card is visible — nothing is drawn
+            // behind it. BackdropView is kept unused rather than deleted in case a future
+            // request brings a background back; it costs nothing sitting idle.
+            setBackgroundColor(Color.TRANSPARENT);
 
             ScrollView scroll = new ScrollView(ctx);
             scroll.setFillViewport(true);
@@ -1125,6 +1128,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
@@ -1245,6 +1249,8 @@ public class ShieldBlockActivity extends Activity {
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
             w.setStatusBarColor(Color.TRANSPARENT);
             w.setNavigationBarColor(Color.TRANSPARENT);
+            // [SHIELD-CARD] card-only: no painted backdrop behind it, even in this fallback host.
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         } catch (Throwable ignored) {}
 
         final ShieldBlockCard.Callbacks callbacks = new ShieldBlockCard.Callbacks() {
@@ -1382,8 +1388,6 @@ const PATCHES = [
           '        try {',
           '            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);',
           '            if (wm == null) return false;',
-          '',
-          '            LinearLayout root = new LinearLayout(ctx);',
         ]),
         replace: L([
           '        if (!sleepToRise) {',
@@ -1394,8 +1398,6 @@ const PATCHES = [
           '        try {',
           '            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);',
           '            if (wm == null) return false;',
-          '',
-          '            LinearLayout root = new LinearLayout(ctx);',
         ]),
       },
       {
@@ -1915,7 +1917,6 @@ const PATCHES = [
 
 // Files that must stay byte-identical (Sleep to Rise / Rise / manifest / enforcement loop).
 const UNTOUCHED = [
-  `${J}/nighttorise/NightToRiseBlockActivity.java`,
   `${J}/nighttorise/NightToRiseManager.java`,
   `${J}/nighttorise/NightToRiseDecider.java`,
   `${J}/nighttorise/NightToRisePreferences.java`,
@@ -1966,6 +1967,7 @@ function verify() {
   check(card && card.includes('public static View build(') && card.includes('static Spec fromIntent') && card.includes('public static View fallback('),
     'ShieldBlockCard.java present and complete', 'ShieldBlockCard.java missing or incomplete');
   check(card && balanced(card), 'ShieldBlockCard.java brackets balanced');
+  check(card && !card.includes('addView(new BackdropView'), 'ShieldBlockCard.java: card-only, no painted backdrop');
 
   const act = get(ACTIVITY_PATH);
   check(act && act.includes(MARK) && act.includes('ShieldBlockCard.build(') && act.includes('ownsInstance'),
@@ -2111,11 +2113,13 @@ function main() {
     if (!failed) plan.push({ rel: p.file, text, crlf: cur.crlf, kind: 'patch' });
   }
 
-  // replaced activity
+  // replaced activity — always compare against the target text, so re-running the
+  // installer after an update to this script upgrades an already-installed file
+  // instead of skipping it just because it has the marker from a previous version.
   try {
     const cur = readText(ACTIVITY_PATH);
-    if (cur.text.includes(MARK)) skipped.push(ACTIVITY_PATH);
-    else if (!cur.text.includes('sSharedLoopGuard') || !cur.text.includes('buildRegularBlockScreen')) {
+    if (cur.text === ACTIVITY_JAVA) skipped.push(ACTIVITY_PATH);
+    else if (!cur.text.includes(MARK) && (!cur.text.includes('sSharedLoopGuard') || !cur.text.includes('buildRegularBlockScreen'))) {
       problems.push(`${ACTIVITY_PATH}: does not look like the version this installer was written for`);
     } else plan.push({ rel: ACTIVITY_PATH, text: ACTIVITY_JAVA, crlf: cur.crlf, kind: 'replace' });
   } catch { problems.push(`missing file: ${ACTIVITY_PATH}`); }

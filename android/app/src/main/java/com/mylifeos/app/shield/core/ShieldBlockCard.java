@@ -825,8 +825,11 @@ public final class ShieldBlockCard {
             boolean compact = !land && (H / d) < 640f;
             boolean hasVis = spec.kind != Kind.CONTENT;
 
-            addView(new BackdropView(ctx, spec),
-                new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+            // [SHIELD-CARD] No backdrop layer: the window itself is translucent (set by the
+            // overlay/activity host), so only the floating card is visible — nothing is drawn
+            // behind it. BackdropView is kept unused rather than deleted in case a future
+            // request brings a background back; it costs nothing sitting idle.
+            setBackgroundColor(Color.TRANSPARENT);
 
             ScrollView scroll = new ScrollView(ctx);
             scroll.setFillViewport(true);

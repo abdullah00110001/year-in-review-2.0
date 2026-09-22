@@ -18,6 +18,9 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+// [N2R-CARD] card-only Sleep/Rise block, shared with the Activity fallback.
+import com.mylifeos.app.nighttorise.NightToRiseBlockCard;
+
 /**
  * Reliable full-screen block surface.
  *
@@ -88,6 +91,13 @@ public final class BlockingOverlay {
         try {
             WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             if (wm == null) return false;
+
+            // [N2R-CARD] Sleep/Rise: card-only, nothing painted behind it. The old
+            // full-screen gradient path below is left in place, untouched, as the
+            // fallback for a Shield-only app block (sleepToRise == false).
+            if (sleepToRise) {
+                return renderNightCard(ctx, windowType, rise, title, message, onHome);
+            }
 
             LinearLayout root = new LinearLayout(ctx);
             root.setOrientation(LinearLayout.VERTICAL);
@@ -237,6 +247,50 @@ public final class BlockingOverlay {
                     if (activeView == shown) hide();
                 }
             }, CARD_FAILSAFE_MS);
+            return true;
+        } catch (Throwable ignored) {
+            hide();
+            return false;
+        }
+    }
+
+    // [N2R-CARD] -----------------------------------------------------------------
+    private static boolean renderNightCard(
+        Context ctx, int windowType, boolean rise, String title, String message, Runnable onHome
+    ) {
+        try {
+            WindowManager wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+            if (wm == null) return false;
+
+            android.widget.FrameLayout outer = new android.widget.FrameLayout(ctx);
+            outer.setClickable(true);
+            outer.setFocusable(true);
+
+            NightToRiseBlockCard.Handles ui = NightToRiseBlockCard.build(ctx, rise);
+            if (title != null && !title.isEmpty()) ui.title.setText(title);
+            if (message != null && !message.isEmpty()) ui.message.setText(message);
+            ui.countdown.setText("");
+            ui.countdownBox.setVisibility(View.GONE);
+            ui.override.setVisibility(View.GONE);
+            ui.home.setOnClickListener(v -> {
+                hide();
+                if (onHome != null) onHome.run();
+            });
+            outer.addView(ui.root, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                windowType,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.TOP | Gravity.START;
+            wm.addView(outer, lp);
+            activeView = outer;
+            activeWindowManager = wm;
             return true;
         } catch (Throwable ignored) {
             hide();

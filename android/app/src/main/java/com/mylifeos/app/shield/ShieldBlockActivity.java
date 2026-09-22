@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
@@ -124,6 +125,8 @@ public class ShieldBlockActivity extends Activity {
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
             w.setStatusBarColor(Color.TRANSPARENT);
             w.setNavigationBarColor(Color.TRANSPARENT);
+            // [SHIELD-CARD] card-only: no painted backdrop behind it, even in this fallback host.
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         } catch (Throwable ignored) {}
 
         final ShieldBlockCard.Callbacks callbacks = new ShieldBlockCard.Callbacks() {

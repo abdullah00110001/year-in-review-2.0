@@ -1,0 +1,2502 @@
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/nighttorise/NightToRiseDecider.java =====
+package com.mylifeos.app.nighttorise;
+
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.TimeZone;
+
+/**
+ * NightToRiseDecider — the pure, side-effect free heart of Sleep to Rise.
+ *
+ * It knows nothing about Android Context / SharedPreferences so it can be unit
+ * tested directly (midnight rollover, blocklist vs allowlist, safety
+ * exemptions, alarm hand-off). NightToRiseManager adapts the persisted
+ * preferences onto {@link Config} and delegates here.
+ *
+ * FIX (v4): Sleep Guard and Rise Guard can now be toggled independently
+ * (cfg.sleepGuardEnabled / cfg.riseGuardEnabled), and Sleep Guard supports two
+ * end modes:
+ *   - "until-alarm" (default, unchanged behavior): Sleep Guard runs
+ *     continuously until the Rise alarm fires (or the safety cap, if no
+ *     alarm) — no gap between Sleep Guard and Rise Guard.
+ *   - "duration": Sleep Guard auto-releases a fixed number of minutes after
+ *     it starts (cfg.sleepGuardDurationMinutes), regardless of the alarm.
+ *     This intentionally creates a GAP — the phone is unlocked between Sleep
+ *     Guard ending and Rise Guard starting at the alarm — matching what was
+ *     explicitly requested: "Sleep Guard auto-off after 2-3 hours, Rise
+ *     Guard starts separately when the alarm fires."
+ */
+public final class NightToRiseDecider {
+
+    private NightToRiseDecider() {}
+
+    public enum Phase { OFF, ARMED, SLEEP_LOCK, RISE_LOCK, PAUSED, INACTIVE_DAY }
+
+    /** Fallback lock duration when no rise alarm is configured (9.5 hours). */
+    public static final int DEFAULT_MAX_LOCK_MINUTES = 570;
+
+    /** A sleep window can never span longer than this (18 hours). */
+    static final long MAX_WINDOW_MS = 18L * 60 * 60 * 1000;
+
+    /**
+     * Packages that can never be locked. Emergency calling, the system dialer,
+     * the system clock, the system UI (status bar / recents chrome) and Life OS
+     * itself must always stay reachable, in every mode.
+     */
+    private static final String[] SAFE_EXACT = new String[]{
+        "com.android.phone",
+        "com.android.dialer",
+        "com.google.android.dialer",
+        "com.samsung.android.dialer",
+        "com.android.server.telecom",
+        "com.android.emergency",
+        "com.android.deskclock",
+        "com.google.android.deskclock",
+        "com.sec.android.app.clockpackage",
+        "com.android.systemui",
+        "com.android.settings",
+    };
+
+    private static final String[] SAFE_CONTAINS = new String[]{
+        "dialer", "telecom", "emergency", "incallui", "deskclock", "clockpackage", "systemui",
+    };
+
+    public static class Config {
+        public boolean enabled;
+        public long    pausedUntilMs;
+        public String  sleepTime = "22:30";     // "HH:MM"
+        public int     sleepBeforeMin = 30;
+        public int     riseAfterMin = 30;
+        public long    riseAlarmMs;
+        public String  scheduleMode = "everyday";
+        public Set<Integer> scheduleDays = new HashSet<>();
+        /** The ONLY packages the user may foreground during a lock window. */
+        public Set<String>  allowedPackages = Collections.emptySet();
+        /**
+         * Runtime-resolved safety exemptions (e.g. the device's default SMS
+         * app), added on top of the hardcoded SAFE_* lists.
+         */
+        public Set<String>  extraSafePackages = Collections.emptySet();
+        public String  sleepMessage = "Time to rest.";
+        public String  riseMessage  = "Start your morning right.";
+        /** Our own package — always exempt. */
+        public String  selfPackage = "com.mylifeos.app";
+        /** Injectable for deterministic tests. */
+        public TimeZone timeZone = TimeZone.getDefault();
+        /**
+         * NEW (v3 safety cap): user-configurable ceiling (minutes) on how long
+         * Sleep Guard can run with NO valid alarm attached, so a missed/never
+         * -set alarm can never leave the lock running indefinitely. Defaults
+         * to DEFAULT_MAX_LOCK_MINUTES when the user hasn't set one.
+         */
+        public int safetyCapMinutes = DEFAULT_MAX_LOCK_MINUTES;
+
+        // NEW (v4) — independent guard toggles + Sleep Guard end mode.
+        public boolean sleepGuardEnabled = true;
+        public boolean riseGuardEnabled  = true;
+        /** "until-alarm" (default) or "duration". */
+        public String  sleepGuardEndMode = "until-alarm";
+        /** Minutes Sleep Guard runs when sleepGuardEndMode == "duration". */
+        public int     sleepGuardDurationMinutes = 180;
+    }
+
+
+    public static class Decision {
+        public final Phase phase;
+        public final boolean shouldBlock;
+        public final long endTimeMs;
+        public final String message;
+        public Decision(Phase p, boolean b, long end, String msg) {
+            this.phase = p; this.shouldBlock = b; this.endTimeMs = end; this.message = msg;
+        }
+    }
+
+    /** True when the package must never be locked, whatever the config says. */
+    public static boolean isSafePackage(Config cfg, String pkg) {
+        if (pkg == null || pkg.isEmpty()) return true;
+        if (cfg.selfPackage != null && pkg.equals(cfg.selfPackage)) return true;
+        if (cfg.extraSafePackages != null && cfg.extraSafePackages.contains(pkg)) return true;
+        for (String s : SAFE_EXACT) if (s.equals(pkg)) return true;
+        String lower = pkg.toLowerCase();
+        for (String s : SAFE_CONTAINS) if (lower.contains(s)) return true;
+        return false;
+    }
+
+    /** Packages displayed by the native block screen as still reachable. */
+    public static Set<String> effectiveAllowedPackages(Config cfg) {
+        Set<String> out = new LinkedHashSet<>();
+        if (cfg.allowedPackages != null) out.addAll(cfg.allowedPackages);
+        if (cfg.extraSafePackages != null) out.addAll(cfg.extraSafePackages);
+        Collections.addAll(out, SAFE_EXACT);
+        return out;
+    }
+
+    /**
+     * FIX (v5) — mirrors the JS model in timeMath.ts exactly, which is the
+     * SINGLE source of truth the UI shows to the user:
+     *
+     *   - Sleep Guard : [sleepStart, alarmTimeOfDay) on the clock circle.
+     *   - Rise Guard  : [alarmTimeOfDay, alarmTimeOfDay + riseAfterMin).
+     *
+     * Previously the native side rejected any alarm more than 18h after the
+     * sleep start ("hasAlarm=false"), fell back to the safety cap, and ALSO
+     * skipped Rise Guard entirely in that case. The UI, working purely on the
+     * 24h clock, kept saying "Sleep Guard active" / "Rise Guard active" while
+     * native reported ARMED and blocked nothing. Both guards are now derived
+     * from the alarm's time-of-day, so what the UI shows is what native does.
+     */
+    public static Decision decide(Config cfg, long nowMs, String foregroundPackage) {
+        if (cfg == null || !cfg.enabled) return new Decision(Phase.OFF, false, 0, "");
+        if (cfg.pausedUntilMs > nowMs)   return new Decision(Phase.PAUSED, false, cfg.pausedUntilMs, "");
+
+        // ---- Safety exemptions come first ----
+        if (isSafePackage(cfg, foregroundPackage)) return new Decision(Phase.ARMED, false, 0, "");
+
+        // ---- ALLOWLIST: anything explicitly allowed passes through ----
+        if (foregroundPackage != null
+            && cfg.allowedPackages != null
+            && cfg.allowedPackages.contains(foregroundPackage)) {
+            return new Decision(Phase.ARMED, false, 0, "");
+        }
+
+        int  sleepStartMin = sleepStartMinuteOfDay(cfg);
+        long sleepStartMs  = mostRecentOccurrence(cfg, sleepStartMin, nowMs);
+        boolean hasAlarm   = cfg.riseAlarmMs > 0;
+
+        // ---- Rise Guard: pure time-of-day window, checked FIRST ----
+        if (cfg.riseGuardEnabled && hasAlarm && cfg.riseAfterMin > 0) {
+            int  alarmMin  = minuteOfDay(cfg, cfg.riseAlarmMs);
+            long riseStart = mostRecentOccurrence(cfg, alarmMin, nowMs);
+            long riseEnd   = riseStart + (long) cfg.riseAfterMin * 60_000L;
+            if (nowMs >= riseStart && nowMs < riseEnd) {
+                // Honour the schedule of the night that led into this morning.
+                long nightStart = mostRecentOccurrence(cfg, sleepStartMin, riseStart);
+                if (isDayActive(cfg, nightStart)) {
+                    return new Decision(Phase.RISE_LOCK, true, riseEnd, cfg.riseMessage);
+                }
+            }
+        }
+
+        // Schedule-day check uses the DAY THE SLEEP WINDOW STARTED.
+        if (!isDayActive(cfg, sleepStartMs)) return new Decision(Phase.INACTIVE_DAY, false, 0, "");
+
+        // ---- Sleep Guard phase ----
+        if (cfg.sleepGuardEnabled) {
+            long alarmMs = hasAlarm
+                ? nextOccurrenceAfter(cfg, minuteOfDay(cfg, cfg.riseAlarmMs), sleepStartMs)
+                : 0L;
+            long sleepEnd;
+            if ("duration".equals(cfg.sleepGuardEndMode)) {
+                int dur = Math.max(15, cfg.sleepGuardDurationMinutes);
+                sleepEnd = sleepStartMs + (long) dur * 60_000L;
+                if (hasAlarm && alarmMs < sleepEnd) sleepEnd = alarmMs;
+            } else {
+                sleepEnd = hasAlarm ? alarmMs : sleepStartMs + (long) cfg.safetyCapMinutes * 60_000L;
+            }
+            if (nowMs >= sleepStartMs && nowMs < sleepEnd) {
+                return new Decision(Phase.SLEEP_LOCK, true, sleepEnd, cfg.sleepMessage);
+            }
+        }
+
+        return new Decision(Phase.ARMED, false, 0, "");
+    }
+
+    private static final long DAY_MS = 24L * 60 * 60 * 1000;
+
+    /** Local minute-of-day (0..1439) of an epoch timestamp. */
+    static int minuteOfDay(Config cfg, long epochMs) {
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(epochMs);
+        return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
+    }
+
+    /** Earliest timestamp strictly AFTER {@code afterMs} at which the clock reads `minuteOfDay`. */
+    static long nextOccurrenceAfter(Config cfg, int minuteOfDay, long afterMs) {
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(afterMs);
+        c.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
+        c.set(Calendar.MINUTE, minuteOfDay % 60);
+        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0);
+        if (c.getTimeInMillis() <= afterMs) c.add(Calendar.DAY_OF_MONTH, 1);
+        return c.getTimeInMillis();
+    }
+
+    /** Kept for callers/tests: snaps an alarm onto (sleepStartMs, sleepStartMs + 24h]. */
+    static long alarmForWindow(long alarmMs, long sleepStartMs) {
+        if (alarmMs <= 0) return 0L;
+        long shifted = alarmMs;
+        while (shifted - sleepStartMs > DAY_MS) shifted -= DAY_MS;
+        while (shifted <= sleepStartMs) shifted += DAY_MS;
+        return shifted;
+    }
+
+    static int sleepStartMinuteOfDay(Config cfg) {
+        String time = (cfg.sleepTime == null || !cfg.sleepTime.contains(":")) ? "22:30" : cfg.sleepTime;
+        String[] s = time.split(":");
+        int sh, sm;
+        try { sh = Integer.parseInt(s[0].trim()); sm = Integer.parseInt(s[1].trim()); }
+        catch (Throwable t) { sh = 22; sm = 30; }
+        return ((sh * 60 + sm) - cfg.sleepBeforeMin + 1440 * 2) % 1440;
+    }
+
+
+    static boolean isDayActive(Config cfg, long atMs) {
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(atMs);
+        int dow = c.get(Calendar.DAY_OF_WEEK) - 1; // 0=Sun..6=Sat
+        String mode = cfg.scheduleMode;
+        if ("everyday".equals(mode)) return true;
+        if ("weekdays".equals(mode)) return dow >= 1 && dow <= 5;
+        return cfg.scheduleDays.contains(dow);
+    }
+
+    /** Latest timestamp <= nowMs at which the clock read `minuteOfDay`. */
+    static long mostRecentOccurrence(Config cfg, int minuteOfDay, long nowMs) {
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(nowMs);
+        c.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
+        c.set(Calendar.MINUTE, minuteOfDay % 60);
+        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0);
+        if (c.getTimeInMillis() > nowMs) c.add(Calendar.DAY_OF_MONTH, -1);
+        return c.getTimeInMillis();
+    }
+}
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/nighttorise/NightToRiseManager.java =====
+package com.mylifeos.app.nighttorise;
+
+import android.content.Context;
+
+/**
+ * NightToRiseManager — thin Android adapter over {@link NightToRiseDecider}.
+ *
+ * All decision logic lives in the decider (pure, unit tested). This class only
+ * reads persisted preferences and maps them onto a Config snapshot.
+ *
+ * Sleep lock runs continuously from the configured pre-sleep start until either
+ * the next Rise alarm fires (seamless hand-off to RISE_LOCK) or the fallback
+ * maximum elapses when no alarm is set — unless the user has chosen
+ * "duration" end mode, in which case Sleep Guard auto-releases after a fixed
+ * number of minutes and a gap follows until Rise Guard starts at the alarm.
+ */
+public class NightToRiseManager {
+
+    /** Kept as an alias so existing call sites keep compiling. */
+    public enum Phase { OFF, ARMED, SLEEP_LOCK, RISE_LOCK, PAUSED, INACTIVE_DAY }
+
+    public static class Decision {
+        public final Phase phase;
+        public final boolean shouldBlock;
+        public final long endTimeMs;
+        public final String message;
+        public Decision(Phase p, boolean b, long end, String msg) {
+            this.phase = p; this.shouldBlock = b; this.endTimeMs = end; this.message = msg;
+        }
+    }
+
+    private final NightToRisePreferences prefs;
+    private final String selfPackage;
+    private final Context appCtx;
+
+    public NightToRiseManager(Context ctx) {
+        this.prefs = new NightToRisePreferences(ctx);
+        this.appCtx = ctx.getApplicationContext();
+        this.selfPackage = appCtx.getPackageName();
+    }
+
+    public NightToRisePreferences prefs() { return prefs; }
+
+    /**
+     * Runtime safety exemptions that can only be resolved on-device: the user's
+     * default SMS app, the default dialer, and every launcher that could ever
+     * be the home-screen handler on this device.
+     */
+    /**
+     * SAFETY-CRITICAL (device reboot): this resolution does 3+ PackageManager
+     * binder calls (including queryIntentActivities, which returns every
+     * launcher on the device). decide() is called once per second by the guard
+     * service AND on every accessibility event, so it was issuing hundreds of
+     * PackageManager transactions per second into system_server — a binder
+     * flood that trips the system_server watchdog and restarts the phone.
+     *
+     * The result only changes when the user swaps their launcher / default SMS
+     * / default dialer, so it is cached process-wide for 10 minutes.
+     */
+    private static final long SAFETY_CACHE_TTL_MS = 10L * 60 * 1000;
+    private static volatile java.util.Set<String> safetyCache = null;
+    private static volatile long safetyCacheAt = 0L;
+
+    private java.util.Set<String> safetyPackages() {
+        java.util.Set<String> cached = safetyCache;
+        if (cached != null
+            && android.os.SystemClock.elapsedRealtime() - safetyCacheAt < SAFETY_CACHE_TTL_MS) {
+            return cached;
+        }
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try {
+            String sms = android.provider.Telephony.Sms.getDefaultSmsPackage(appCtx);
+            if (sms != null) out.add(sms);
+        } catch (Throwable ignored) {}
+        try {
+            android.telecom.TelecomManager tm =
+                (android.telecom.TelecomManager) appCtx.getSystemService(Context.TELECOM_SERVICE);
+            if (tm != null) {
+                String dialer = tm.getDefaultDialerPackage();
+                if (dialer != null) out.add(dialer);
+            }
+        } catch (Throwable ignored) {}
+        // CRITICAL FIX: the home-screen launcher was never exempt, so pressing
+        // Home during a lock window triggered the block screen ON TOP OF the
+        // launcher itself — leaving no way to navigate anywhere (home screen,
+        // notification shade, app switcher all became unreachable, since the
+        // block screen kept re-covering them every poll tick). Every launcher
+        // that could ever be the default (device-dependent — MIUI, stock,
+        // Nova, etc.) must be exempt, resolved dynamically same as SMS/dialer
+        // above rather than hardcoded, since the package name varies by device/ROM.
+        try {
+            android.content.Intent home = new android.content.Intent(android.content.Intent.ACTION_MAIN);
+            home.addCategory(android.content.Intent.CATEGORY_HOME);
+            android.content.pm.PackageManager pm = appCtx.getPackageManager();
+            android.content.pm.ResolveInfo ri = pm.resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            if (ri != null && ri.activityInfo != null) out.add(ri.activityInfo.packageName);
+            // Also exempt every app that COULD handle the home intent (covers
+            // cases where the resolver above returns a chooser instead of the
+            // actual launcher, e.g. right after a ROM update reset the default).
+            for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(home, 0)) {
+                if (r.activityInfo != null) out.add(r.activityInfo.packageName);
+            }
+        } catch (Throwable ignored) {}
+        safetyCache = java.util.Collections.unmodifiableSet(out);
+        safetyCacheAt = android.os.SystemClock.elapsedRealtime();
+        return safetyCache;
+    }
+
+    /** Drop the cached launcher/SMS/dialer exemptions (config changed, boot, etc.). */
+    public static void invalidateSafetyCache() {
+        safetyCache = null;
+        safetyCacheAt = 0L;
+    }
+
+
+    public NightToRiseDecider.Config snapshot() {
+        NightToRiseDecider.Config cfg = new NightToRiseDecider.Config();
+        cfg.enabled         = prefs.isEnabled();
+        cfg.pausedUntilMs   = prefs.pausedUntilMs();
+        cfg.sleepTime       = prefs.sleepTime();
+        cfg.sleepBeforeMin  = prefs.sleepBeforeMin();
+        cfg.riseAfterMin    = prefs.riseAfterMin();
+        cfg.riseAlarmMs     = prefs.riseAlarmMs();
+        cfg.scheduleMode    = prefs.scheduleMode();
+        cfg.scheduleDays    = prefs.scheduleDays();
+        cfg.allowedPackages = prefs.allowedPackages();
+        cfg.extraSafePackages = safetyPackages();
+
+        cfg.sleepMessage    = prefs.sleepMessage();
+        cfg.riseMessage     = prefs.riseMessage();
+        cfg.selfPackage     = selfPackage;
+        // NEW (v3 safety cap): wire the user-configurable ceiling through to
+        // the decider. Falls back to the decider's own default (9.5h) if the
+        // stored value is somehow 0/unset.
+        int capHours = prefs.safetyCapHours();
+        cfg.safetyCapMinutes = capHours > 0 ? capHours * 60 : NightToRiseDecider.DEFAULT_MAX_LOCK_MINUTES;
+
+        // NEW (v4): independent guard toggles + Sleep Guard end mode.
+        cfg.sleepGuardEnabled = prefs.sleepGuardEnabled();
+        cfg.riseGuardEnabled  = prefs.riseGuardEnabled();
+        cfg.sleepGuardEndMode = prefs.sleepGuardEndMode();
+        cfg.sleepGuardDurationMinutes = prefs.sleepGuardDurationMinutes();
+
+        return cfg;
+    }
+
+    /** Compute the current decision for a foreground package. */
+    public Decision decide(long nowMs, String foregroundPackage) {
+        NightToRiseDecider.Decision d =
+            NightToRiseDecider.decide(snapshot(), nowMs, foregroundPackage);
+        return new Decision(Phase.valueOf(d.phase.name()), d.shouldBlock, d.endTimeMs, d.message);
+    }
+
+    /**
+     * Called from BootReceiver: the stored Rise alarm reference points at a
+     * timestamp that may have passed while the phone was off, which would leave
+     * the Rise window permanently "already ended". Re-point it at the earliest
+     * future alarm shot that survived the reboot so Sleep/Rise enforcement
+     * keeps working without waiting for the app to be opened.
+     */
+    public static void onBootRestored(Context ctx) {
+        NightToRisePreferences p = new NightToRisePreferences(ctx);
+        long now = System.currentTimeMillis();
+        if (p.riseAlarmMs() > now) return;
+
+        long earliest = Long.MAX_VALUE;
+        for (com.mylifeos.app.rise.scheduler.RiseAlarmStore.Shot s
+                : com.mylifeos.app.rise.scheduler.RiseAlarmStore.all(ctx)) {
+            if (s == null) continue;
+            long when = s.dayOfWeek >= 0
+                ? com.mylifeos.app.rise.core.AlarmTimeMath.rollForwardWeekly(s.timeInMillis, now)
+                : s.timeInMillis;
+            if (when > now && when < earliest) earliest = when;
+        }
+        if (earliest != Long.MAX_VALUE) p.saveRiseAlarmMillis(earliest);
+    }
+}
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/nighttorise/NightToRisePreferences.java =====
+package com.mylifeos.app.nighttorise;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.HashSet;
+import java.util.Set;
+
+/**
+ * NightToRisePreferences — persistent mirror of the JS NightToRiseConfig.
+ * Written by NightToRisePlugin.setConfig (JSON) and read by NightToRiseManager.
+ *
+ * FIX (v2): added a "pending break" flag. When the user taps "Emergency
+ * unlock" on the native block screen (NightToRiseBlockActivity), we can't
+ * call back into JS directly (the app may not even be foregrounded), so we
+ * just persist a timestamp here. The next time the JS layer is foregrounded,
+ * it calls NightToRisePlugin.consumePendingBreak() to pick it up and reset
+ * the streak correctly.
+ *
+ * FIX (v3): added the safety cap + emergency kill switch. See
+ * safetyCapHours()/emergencyDisable() below.
+ *
+ * FIX (v4): mirrors the four new independent-guard fields from
+ * NightToRiseConfig (types.ts): sleepGuardEnabled, riseGuardEnabled,
+ * sleepGuardEndMode, sleepGuardDurationMinutes. Lets the user run Sleep
+ * Guard and Rise Guard independently, and choose whether Sleep Guard ends
+ * at the Rise alarm or auto-releases after a fixed duration.
+ */
+public class NightToRisePreferences {
+    private static final String PREFS = "night_to_rise_prefs";
+
+    private static final String K_ENABLED          = "enabled";
+    private static final String K_CONFIGURED       = "configured";
+    private static final String K_SLEEP_TIME       = "sleepTime";              // "HH:MM"
+    private static final String K_SLEEP_BEFORE_MIN = "sleepLockMinutesBefore";
+    private static final String K_RISE_AFTER_MIN   = "riseLockMinutesAfter";
+    private static final String K_ALLOWED_PACKAGES = "allowedPackages";        // CSV
+    private static final String K_SCHEDULE_MODE    = "scheduleMode";           // everyday|weekdays|custom
+    private static final String K_SCHEDULE_DAYS    = "scheduleDays";           // CSV ints 0-6
+    private static final String K_STRICT_MODE      = "strictMode";
+    private static final String K_PAUSED_UNTIL_MS  = "pausedUntilMs";
+    private static final String K_RISE_ALARM_MS    = "riseAlarmMs";
+    private static final String K_SLEEP_MSG        = "sleepBlockMessage";
+    private static final String K_RISE_MSG         = "riseBlockMessage";
+    private static final String K_PENDING_BREAK_TS = "pendingBreakTs"; // NEW
+    private static final String K_BLOCKED_PACKAGES = "blockedPackages";        // CSV  (PHASE 2)
+    private static final String K_BLOCKED_SITES    = "blockedSites";           // CSV  (PHASE 2)
+    private static final String K_BLOCKED_KEYWORDS = "blockedKeywords";        // CSV  (PHASE 2)
+    private static final String K_BLOCKLIST_MODE   = "blocklistMode";          // blocklist|allowlist
+    private static final String K_STRICT_UNTIL_MS  = "strictModeLockedUntil";   // SECTION 4/5
+    private static final String K_RAMP_SECONDS     = "alarmVolumeRampSeconds";  // SECTION 5
+    private static final String K_CHRONOTYPE       = "chronotypeEstimate";      // SECTION 5
+
+    // NEW (v3) — safety cap, independent of alarm state.
+    private static final String K_SAFETY_CAP_HOURS = "safetyCapHours";
+    private static final int    DEFAULT_SAFETY_CAP_HOURS = 10;
+
+    // NEW (v4) — independent guard toggles + Sleep Guard end mode.
+    private static final String K_SLEEP_GUARD_ENABLED = "sleepGuardEnabled";
+    private static final String K_RISE_GUARD_ENABLED  = "riseGuardEnabled";
+    private static final String K_SLEEP_END_MODE      = "sleepGuardEndMode";       // "until-alarm" | "duration"
+    private static final String K_SLEEP_DURATION_MIN  = "sleepGuardDurationMinutes";
+
+    private final SharedPreferences sp;
+
+    public NightToRisePreferences(Context ctx) {
+        this.sp = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    public void saveJsonConfig(String json) throws Exception {
+        JSONObject o = new JSONObject(json);
+        SharedPreferences.Editor e = sp.edit();
+        e.putBoolean(K_ENABLED,          o.optBoolean("enabled", false));
+        e.putBoolean(K_CONFIGURED,       o.optBoolean("configured", false));
+        e.putString (K_SLEEP_TIME,       o.optString("sleepTime", "22:30"));
+        e.putInt    (K_SLEEP_BEFORE_MIN, o.optInt("sleepLockMinutesBefore", 30));
+        e.putInt    (K_RISE_AFTER_MIN,   o.optInt("riseLockMinutesAfter", 30));
+        e.putString (K_SCHEDULE_MODE,    o.optString("scheduleMode", "everyday"));
+        e.putBoolean(K_STRICT_MODE,      o.optBoolean("strictMode", false));
+        e.putString (K_SLEEP_MSG,        o.optString("sleepBlockMessage", "Time to rest."));
+        e.putString (K_RISE_MSG,         o.optString("riseBlockMessage", "Start your morning right."));
+        // NEW (v3): safety cap, in hours. Falls back to a sane default so
+        // existing configs saved before this field existed don't end up with 0.
+        e.putInt    (K_SAFETY_CAP_HOURS, o.optInt("safetyCapHours", DEFAULT_SAFETY_CAP_HOURS));
+
+        // NEW (v4): independent guard toggles + Sleep Guard end mode.
+        e.putBoolean(K_SLEEP_GUARD_ENABLED, o.optBoolean("sleepGuardEnabled", true));
+        e.putBoolean(K_RISE_GUARD_ENABLED,  o.optBoolean("riseGuardEnabled", true));
+        String endMode = o.optString("sleepGuardEndMode", "until-alarm");
+        e.putString (K_SLEEP_END_MODE, "duration".equals(endMode) ? "duration" : "until-alarm");
+        e.putInt    (K_SLEEP_DURATION_MIN, o.optInt("sleepGuardDurationMinutes", 180));
+
+        JSONArray days = o.optJSONArray("scheduleDays");
+        StringBuilder dCsv = new StringBuilder();
+        if (days != null) for (int i = 0; i < days.length(); i++) { if (i > 0) dCsv.append(","); dCsv.append(days.optInt(i)); }
+        e.putString(K_SCHEDULE_DAYS, dCsv.toString());
+
+        JSONArray apps = o.optJSONArray("allowedApps");
+        StringBuilder aCsv = new StringBuilder();
+        if (apps != null) for (int i = 0; i < apps.length(); i++) {
+            JSONObject a = apps.optJSONObject(i);
+            if (a == null) continue;
+            String id = a.optString("id", "");
+            if (id.isEmpty()) continue;
+            if (aCsv.length() > 0) aCsv.append(",");
+            aCsv.append(id);
+        }
+        e.putString(K_ALLOWED_PACKAGES, aCsv.toString());
+
+        // Sleep to Rise is allowlist-only: legacy blocklist keys are cleared.
+        e.remove(K_BLOCKLIST_MODE);
+        e.remove(K_BLOCKED_PACKAGES);
+        e.remove(K_BLOCKED_SITES);
+        e.remove(K_BLOCKED_KEYWORDS);
+
+
+        e.putInt   (K_RAMP_SECONDS, o.optInt("alarmRampSeconds", 45));
+        e.putString(K_CHRONOTYPE,   o.optString("chronotype", ""));
+
+        String strictUntil = o.optString("strictLockedUntil", null);
+        if (strictUntil != null && !strictUntil.isEmpty() && !"null".equals(strictUntil)) {
+            try { e.putLong(K_STRICT_UNTIL_MS, java.time.Instant.parse(strictUntil).toEpochMilli()); }
+            catch (Throwable ignored) { e.remove(K_STRICT_UNTIL_MS); }
+        } else {
+            e.remove(K_STRICT_UNTIL_MS);
+        }
+
+        String paused = o.optString("pausedUntil", null);
+        if (paused != null && !paused.isEmpty() && !"null".equals(paused)) {
+            try { e.putLong(K_PAUSED_UNTIL_MS, java.time.Instant.parse(paused).toEpochMilli()); }
+            catch (Throwable ignored) { e.remove(K_PAUSED_UNTIL_MS); }
+        } else {
+            e.remove(K_PAUSED_UNTIL_MS);
+        }
+        e.apply();
+    }
+
+    private static String joinStrings(JSONArray arr) {
+        StringBuilder sb = new StringBuilder();
+        if (arr == null) return "";
+        for (int i = 0; i < arr.length(); i++) {
+            String v = arr.optString(i, "").trim().toLowerCase();
+            if (v.isEmpty()) continue;
+            if (sb.length() > 0) sb.append(",");
+            sb.append(v);
+        }
+        return sb.toString();
+    }
+
+    public void saveRiseAlarmMillis(long ms) { sp.edit().putLong(K_RISE_ALARM_MS, ms).apply(); }
+
+    public boolean isEnabled()        { return sp.getBoolean(K_ENABLED, false) && sp.getBoolean(K_CONFIGURED, false); }
+    public String  sleepTime()        { return sp.getString(K_SLEEP_TIME, "22:30"); }
+    public int     sleepBeforeMin()   { return sp.getInt(K_SLEEP_BEFORE_MIN, 30); }
+    public int     riseAfterMin()     { return sp.getInt(K_RISE_AFTER_MIN, 30); }
+    public String  scheduleMode()     { return sp.getString(K_SCHEDULE_MODE, "everyday"); }
+    public String  sleepMessage()     { return sp.getString(K_SLEEP_MSG, "Time to rest."); }
+    public String  riseMessage()      { return sp.getString(K_RISE_MSG, "Start your morning right."); }
+    public boolean strictMode()       { return sp.getBoolean(K_STRICT_MODE, false); }
+    public long    pausedUntilMs()    { return sp.getLong(K_PAUSED_UNTIL_MS, 0L); }
+    public long    riseAlarmMs()      { return sp.getLong(K_RISE_ALARM_MS, 0L); }
+    public long    strictLockedUntilMs() { return sp.getLong(K_STRICT_UNTIL_MS, 0L); }
+    /** Native-side enforcement: reject settings writes while the 24h commit runs. */
+    public boolean strictSettingsLocked() { return strictMode() && strictLockedUntilMs() > System.currentTimeMillis(); }
+    public int     alarmRampSeconds() { return sp.getInt(K_RAMP_SECONDS, 45); }
+    public String  chronotype()       { return sp.getString(K_CHRONOTYPE, ""); }
+
+    /** NEW (v3): hard ceiling on how long Sleep Guard can run past its start,
+     *  even with no/expired alarm. Prevents an indefinite lockout. */
+    public int safetyCapHours() { return sp.getInt(K_SAFETY_CAP_HOURS, DEFAULT_SAFETY_CAP_HOURS); }
+
+    /** NEW (v4): whether each guard is independently active. Both default true. */
+    public boolean sleepGuardEnabled() { return sp.getBoolean(K_SLEEP_GUARD_ENABLED, true); }
+    public boolean riseGuardEnabled()  { return sp.getBoolean(K_RISE_GUARD_ENABLED, true); }
+    /** "until-alarm" (default) or "duration". */
+    public String  sleepGuardEndMode() { return sp.getString(K_SLEEP_END_MODE, "until-alarm"); }
+    /** Minutes Sleep Guard runs when sleepGuardEndMode() == "duration". Default 180 (3h). */
+    public int     sleepGuardDurationMinutes() { return sp.getInt(K_SLEEP_DURATION_MIN, 180); }
+
+    public Set<Integer> scheduleDays() {
+        Set<Integer> out = new HashSet<>();
+        String csv = sp.getString(K_SCHEDULE_DAYS, "0,1,2,3,4,5,6");
+        for (String s : csv.split(",")) { try { out.add(Integer.parseInt(s.trim())); } catch (Throwable ignored) {} }
+        return out;
+    }
+
+
+
+
+    private Set<String> csvSet(String key) {
+        Set<String> out = new HashSet<>();
+        String csv = sp.getString(key, "");
+        for (String s : csv.split(",")) { String t = s.trim(); if (!t.isEmpty()) out.add(t); }
+        return out;
+    }
+
+    public Set<String> allowedPackages() {
+        Set<String> out = new HashSet<>();
+        String csv = sp.getString(K_ALLOWED_PACKAGES, "");
+        for (String s : csv.split(",")) { String t = s.trim(); if (!t.isEmpty()) out.add(t); }
+        return out;
+    }
+
+    // ==========================================================
+    // NEW: pending-break flag (native override -> JS streak sync)
+    // ==========================================================
+
+    // ==========================================================
+    // PHASE 2: strict-mode delayed unlock request
+    // ==========================================================
+    private static final String K_STRICT_REQ_TS = "strictUnlockRequestedAt";
+    /** 10 minute cool-down before strict mode allows an emergency unlock. */
+    public static final long STRICT_UNLOCK_DELAY_MS = 10 * 60 * 1000L;
+
+    public long strictUnlockRequestedAt() { return sp.getLong(K_STRICT_REQ_TS, 0L); }
+    public void requestStrictUnlock()     { sp.edit().putLong(K_STRICT_REQ_TS, System.currentTimeMillis()).apply(); }
+    public void clearStrictUnlockRequest(){ sp.edit().remove(K_STRICT_REQ_TS).apply(); }
+
+    /** Called by NightToRiseBlockActivity when the user taps "Emergency unlock". */
+    public void recordPendingBreak() {
+        sp.edit().putLong(K_PENDING_BREAK_TS, System.currentTimeMillis()).apply();
+    }
+
+    // ==========================================================
+    // NEW (v3): emergency kill switch
+    // ==========================================================
+    /**
+     * KILL SWITCH — the one write path in this entire feature that does not
+     * depend on JSON parsing, config validation, streak logic, or any other
+     * code that could itself be the reason someone gets stuck. Called only
+     * from the 7-tap gesture on the native block screen
+     * (NightToRiseBlockActivity). Deliberately as small and dependency-free
+     * as possible: it does exactly one thing, unconditionally.
+     */
+    public void emergencyDisable() {
+        sp.edit().putBoolean(K_ENABLED, false).apply();
+    }
+
+    // ==========================================================
+    // Blocked-attempt counters (drained by JS into night_to_rise_* logs)
+    // ==========================================================
+    private static final String K_ATTEMPTS      = "blockedAttempts";
+    private static final String K_ATTEMPT_PKGS  = "blockedAttemptPackages"; // CSV "pkg|window"
+    private static final int    MAX_ATTEMPT_PKGS = 40;
+
+    /** Records one blocked foreground attempt during a lock window. */
+    public synchronized void recordBlockedAttempt(String pkg, String windowType) {
+        int count = sp.getInt(K_ATTEMPTS, 0) + 1;
+        StringBuilder sb = new StringBuilder(sp.getString(K_ATTEMPT_PKGS, ""));
+        String[] existing = sb.toString().split(",");
+        if (existing.length >= MAX_ATTEMPT_PKGS) {
+            sb = new StringBuilder();
+            for (int i = existing.length - MAX_ATTEMPT_PKGS + 1; i < existing.length; i++) {
+                if (existing[i].trim().isEmpty()) continue;
+                if (sb.length() > 0) sb.append(",");
+                sb.append(existing[i].trim());
+            }
+        }
+        if (pkg != null && !pkg.isEmpty()) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(pkg).append("|").append(windowType == null ? "sleep" : windowType);
+        }
+        sp.edit().putInt(K_ATTEMPTS, count).putString(K_ATTEMPT_PKGS, sb.toString()).apply();
+    }
+
+    public int blockedAttempts() { return sp.getInt(K_ATTEMPTS, 0); }
+
+    /** Returns pending "pkg|window" entries and clears the buffer. */
+    public synchronized String[] drainBlockedAttempts() {
+        String csv = sp.getString(K_ATTEMPT_PKGS, "");
+        sp.edit().putInt(K_ATTEMPTS, 0).remove(K_ATTEMPT_PKGS).apply();
+        if (csv.isEmpty()) return new String[0];
+        return csv.split(",");
+    }
+
+    /**
+     * Called by NightToRisePlugin.consumePendingBreak() when JS resumes.
+     * Returns true (and clears the flag) exactly once per break event.
+     */
+    public boolean consumePendingBreak() {
+        long ts = sp.getLong(K_PENDING_BREAK_TS, 0L);
+        if (ts <= 0L) return false;
+        sp.edit().remove(K_PENDING_BREAK_TS).apply();
+        return true;
+    }
+}
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/nighttorise/NightToRisePlugin.java =====
+package com.mylifeos.app.nighttorise;
+
+import android.content.Context;
+import android.provider.Settings;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+
+/**
+ * NightToRisePlugin — JS bridge for syncing Night-to-Rise config + rise alarm
+ * time into SharedPreferences so the accessibility service can enforce the lock.
+ *
+ * JS side: registerPlugin<…>('NightToRise')
+ *   - setConfig({ json: string })
+ *   - setRiseAlarm({ epochMillis: number })
+ *   - consumePendingBreak() -> { broke: boolean }
+ *   - getStatus() -> NativeLockStatus   [FIX: was declared on the TS side
+ *     (nightToRiseBridge.ts) and called from NightToRiseGuard, but never
+ *     actually implemented here — every call silently failed and returned
+ *     null. This is why the in-app "Rest now" overlay's phase was always
+ *     computed locally in JS instead of reflecting real native enforcement.]
+ *
+ * FIX (v2): setConfig/setRiseAlarm now also call ForegroundGuardService.kick(),
+ * so the polling enforcement service actually starts/stops immediately when
+ * the user toggles Sleep to Rise or changes settings — it used to only start
+ * on boot (via BootReceiver), so a fresh toggle mid-session had no effect
+ * until the next reboot.
+ */
+@CapacitorPlugin(name = "NightToRise")
+public class NightToRisePlugin extends Plugin {
+
+    @PluginMethod
+    public void setConfig(PluginCall call) {
+        String json = call.getString("json");
+        if (json == null) { call.reject("json required"); return; }
+        try {
+            new NightToRisePreferences(getContext()).saveJsonConfig(json);
+            com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(getContext());
+            call.resolve();
+        } catch (Exception t) {
+            call.reject("setConfig failed: " + t.getMessage(), t);
+        }
+    }
+
+    @PluginMethod
+    public void setRiseAlarm(PluginCall call) {
+        long ms = call.getLong("epochMillis", 0L);
+        new NightToRisePreferences(getContext()).saveRiseAlarmMillis(ms);
+        com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(getContext());
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void consumePendingBreak(PluginCall call) {
+        boolean broke = new NightToRisePreferences(getContext()).consumePendingBreak();
+        JSObject ret = new JSObject();
+        ret.put("broke", broke);
+        call.resolve(ret);
+    }
+
+    /**
+     * NEW: real native enforcement state, matching NativeLockStatus on the TS
+     * side exactly:
+     *   { enabled, phase, locking, endTimeMs, accessibilityEnabled }
+     *
+     * We deliberately probe with a package name that can never match the
+     * self-package exemption, the allowlist, or any hardcoded safe package —
+     * decide()'s safe-package check treats null/empty as "safe" (so it would
+     * always report ARMED regardless of the real window), and a real
+     * foreground package could itself be on the allowlist (also always
+     * reporting ARMED). A private-use probe string guarantees the returned
+     * phase reflects the actual sleep/rise window, not whatever happens to
+     * be in the foreground at the moment this is called.
+     */
+    @PluginMethod
+    public void getStatus(PluginCall call) {
+        Context ctx = getContext();
+        NightToRiseManager mgr = new NightToRiseManager(ctx);
+        NightToRiseManager.Decision d =
+            mgr.decide(System.currentTimeMillis(), "__n2r_status_probe__");
+
+        JSObject ret = new JSObject();
+        ret.put("enabled", mgr.prefs().isEnabled());
+        ret.put("phase", d.phase.name());
+        ret.put("locking", d.shouldBlock);
+        ret.put("endTimeMs", d.endTimeMs);
+        ret.put("accessibilityEnabled", isAccessibilityServiceEnabled(ctx));
+        call.resolve(ret);
+    }
+
+    /**
+     * getDiagnostics — live self-test of the whole enforcement chain, so
+     * "guards say active but nothing is blocked" is answerable on-device
+     * without a log cable. Also SELF-HEALS: re-syncs the polling guard
+     * service, which OEM task killers (MIUI/HyperOS) love to kill silently.
+     */
+    @PluginMethod
+    public void getDiagnostics(PluginCall call) {
+        Context ctx = getContext();
+        NightToRiseManager mgr = new NightToRiseManager(ctx);
+        NightToRiseDecider.Config cfg = mgr.snapshot();
+        NightToRiseManager.Decision d =
+            mgr.decide(System.currentTimeMillis(), "__n2r_status_probe__");
+
+        // Self-heal: make sure the poll service is running when it should be.
+        boolean synced = false;
+        try {
+            com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(ctx);
+            synced = true;
+        } catch (Throwable ignored) {}
+
+        JSObject ret = new JSObject();
+        ret.put("enabled", mgr.prefs().isEnabled());
+        ret.put("configured", cfg.enabled);
+        ret.put("phase", d.phase.name());
+        ret.put("locking", d.shouldBlock);
+        ret.put("endTimeMs", d.endTimeMs);
+        ret.put("sleepGuardEnabled", cfg.sleepGuardEnabled);
+        ret.put("riseGuardEnabled", cfg.riseGuardEnabled);
+        ret.put("sleepTime", cfg.sleepTime);
+        ret.put("riseAlarmMs", cfg.riseAlarmMs);
+        ret.put("allowedCount", cfg.allowedPackages == null ? 0 : cfg.allowedPackages.size());
+        ret.put("accessibilityEnabled", isAccessibilityServiceEnabled(ctx));
+        ret.put("accessibilityConnected",
+            com.mylifeos.app.shield.ShieldAccessibilityService.isConnected());
+        ret.put("overlayGranted", hasOverlay(ctx));
+        ret.put("guardServiceSynced", synced);
+        ret.put("guardServiceRunning", isGuardServiceRunning(ctx));
+
+        // Last observed enforcement pass + last actual block.
+        ret.put("lastPhase", com.mylifeos.app.shield.core.BlockEnforcer.lastPhase);
+        ret.put("lastLocking", com.mylifeos.app.shield.core.BlockEnforcer.lastLocking);
+        ret.put("lastForegroundPackage",
+            com.mylifeos.app.shield.core.BlockEnforcer.lastForegroundPackage());
+        ret.put("lastGuardPassAt", com.mylifeos.app.shield.core.BlockEnforcer.lastGuardPassAt);
+        ret.put("lastUsageAccess", com.mylifeos.app.shield.core.BlockEnforcer.lastUsageAccess);
+        ret.put("lastBlockAt", com.mylifeos.app.shield.core.BlockEnforcer.lastBlockAt);
+        ret.put("lastBlockedPkg", com.mylifeos.app.shield.core.BlockEnforcer.lastBlockedPkg);
+        ret.put("lastError", com.mylifeos.app.shield.core.BlockEnforcer.lastError);
+        call.resolve(ret);
+    }
+
+    private boolean hasOverlay(Context ctx) {
+        try {
+            return android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M
+                || Settings.canDrawOverlays(ctx);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean isGuardServiceRunning(Context ctx) {
+        try {
+            android.app.ActivityManager am =
+                (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return false;
+            String target =
+                com.mylifeos.app.shield.core.ForegroundGuardService.class.getName();
+            for (android.app.ActivityManager.RunningServiceInfo s : am.getRunningServices(200)) {
+                if (s.service != null && target.equals(s.service.getClassName())) return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+
+    private boolean isAccessibilityServiceEnabled(Context ctx) {
+        try {
+            String enabled = Settings.Secure.getString(
+                ctx.getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (enabled == null || enabled.isEmpty()) return false;
+            String target = ctx.getPackageName() + "/"
+                + com.mylifeos.app.shield.ShieldAccessibilityService.class.getName();
+            for (String s : enabled.split(":")) {
+                if (s.equalsIgnoreCase(target)) return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+}
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/nighttorise/GuardTransitionNotifier.java =====
+package com.mylifeos.app.nighttorise;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+import android.util.Log;
+
+import androidx.core.app.NotificationCompat;
+
+import com.mylifeos.app.MainActivity;
+import com.mylifeos.app.R;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
+/**
+ * GuardTransitionNotifier — posts a one-shot alert whenever a Sleep to Rise
+ * guard turns on, turns off, or its timer finishes.
+ *
+ * The last announced phase is persisted (not just kept in memory) so a service
+ * restart / process death doesn't replay the same announcement, and a
+ * transition that happens while the guard service was respawning is still
+ * detected on the next pass.
+ */
+public final class GuardTransitionNotifier {
+
+    private static final String TAG = "GuardTransition";
+    private static final String CHANNEL_ID = "sleep_to_rise_transitions";
+    private static final int NOTIF_ID = 4712;
+    private static final String PREFS = "sleep_to_rise_transitions";
+    private static final String KEY_LAST_PHASE = "last_announced_phase";
+
+    /**
+     * Hard floor between two announcements. Without it, a decision that
+     * oscillates on a millisecond boundary (ARMED ↔ LOCK) could post a
+     * notification on every single guard pass, which reads to the user as the
+     * phone spamming/looping.
+     */
+    private static final long MIN_INTERVAL_MS = 30_000L;
+    private static volatile long lastPostAt = 0L;
+
+    /** In-memory mirror so the common "no change" case never touches disk. */
+    private static volatile String cachedPhase = null;
+
+    private GuardTransitionNotifier() {}
+
+    /** Call on every guard pass with the current decision. */
+    public static void onDecision(Context ctx, NightToRiseManager.Decision d) {
+        if (ctx == null || d == null) return;
+        try {
+            String current = d.phase.name();
+            // Fast path: nothing changed since the last pass — no disk, no work.
+            if (current.equals(cachedPhase)) return;
+
+            SharedPreferences sp = ctx.getApplicationContext()
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            String previous = cachedPhase != null ? cachedPhase : sp.getString(KEY_LAST_PHASE, null);
+            if (current.equals(previous)) { cachedPhase = current; return; }
+
+            cachedPhase = current;
+            // apply() — never commit() — this runs on the guard poll path and a
+            // synchronous disk write there is an ANR risk.
+            sp.edit().putString(KEY_LAST_PHASE, current).apply();
+            if (previous == null) return; // first ever pass — nothing to announce
+
+            long now = System.currentTimeMillis();
+            if (now - lastPostAt < MIN_INTERVAL_MS) return; // debounce flapping
+            lastPostAt = now;
+
+            String title = null;
+            String text = null;
+            boolean wasLocking = "SLEEP_LOCK".equals(previous) || "RISE_LOCK".equals(previous);
+
+            switch (current) {
+                case "SLEEP_LOCK":
+                    title = "🌙 Sleep Guard is on";
+                    text = "Only your allowed apps can open" + untilSuffix(d);
+                    break;
+                case "RISE_LOCK":
+                    title = "🌅 Rise Guard is on";
+                    text = "Stay up — distractions stay locked" + untilSuffix(d);
+                    break;
+                case "ARMED":
+                    title = wasLocking ? "✅ Guard finished" : "Sleep to Rise is armed";
+                    text = wasLocking
+                        ? "Your apps are unlocked again."
+                        : "Your guards will start on schedule.";
+                    break;
+                case "PAUSED":
+                    title = "⏸️ Sleep to Rise paused";
+                    text = "Guards won't run until the pause ends.";
+                    break;
+                case "INACTIVE_DAY":
+                    title = "Sleep to Rise off today";
+                    text = "Today isn't part of your schedule.";
+                    break;
+                case "OFF":
+                    title = wasLocking ? "✅ Guard finished" : "Sleep to Rise turned off";
+                    text = wasLocking
+                        ? "Your apps are unlocked again."
+                        : "No guards are scheduled.";
+                    break;
+                default:
+                    return;
+            }
+
+            post(ctx, title, text);
+        } catch (Throwable t) {
+            Log.w(TAG, "transition notify failed", t);
+        }
+    }
+
+    private static String untilSuffix(NightToRiseManager.Decision d) {
+        if (d.endTimeMs <= 0) return "";
+        try {
+            return " · until "
+                + new SimpleDateFormat("h:mm a", Locale.getDefault()).format(new Date(d.endTimeMs));
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static void post(Context ctx, String title, String text) {
+        NotificationManager nm =
+            (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                CHANNEL_ID, "Sleep to Rise alerts", NotificationManager.IMPORTANCE_DEFAULT);
+            ch.setDescription("Tells you when Sleep Guard or Rise Guard starts and ends");
+            nm.createNotificationChannel(ch);
+        }
+
+        Intent open = new Intent(ctx, MainActivity.class);
+        open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(
+            ctx, 12, open,
+            PendingIntent.FLAG_UPDATE_CURRENT
+                | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0));
+
+        Notification n = new NotificationCompat.Builder(ctx, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_shield)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(pi)
+            .build();
+        nm.notify(NOTIF_ID, n);
+    }
+}
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/rise/core/AlarmTimeMath.java =====
+package com.mylifeos.app.rise.core;
+
+import java.util.Calendar;
+import java.util.TimeZone;
+
+/**
+ * AlarmTimeMath — pure, unit-testable time helpers for recurring alarms.
+ * No Android APIs so it can run on the JVM in unit tests.
+ */
+public final class AlarmTimeMath {
+
+    private AlarmTimeMath() {}
+
+    public static final long WEEK_MS = 7L * 24 * 60 * 60 * 1000;
+
+    /**
+     * Next future occurrence of {@code dayOfWeek} (0=Sun..6=Sat) at hour:minute.
+     * Returns a timestamp strictly greater than {@code nowMs}.
+     */
+    public static long nextOccurrence(int dayOfWeek, int hour, int minute, long nowMs, TimeZone tz) {
+        Calendar c = Calendar.getInstance(tz);
+        c.setTimeInMillis(nowMs);
+        c.set(Calendar.HOUR_OF_DAY, hour);
+        c.set(Calendar.MINUTE, minute);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        int current = c.get(Calendar.DAY_OF_WEEK) - 1; // 0=Sun
+        int diff = dayOfWeek - current;
+        if (diff < 0) diff += 7;
+        c.add(Calendar.DAY_OF_MONTH, diff);
+        if (c.getTimeInMillis() <= nowMs) c.add(Calendar.DAY_OF_MONTH, 7);
+        return c.getTimeInMillis();
+    }
+
+    public static long nextOccurrence(int dayOfWeek, int hour, int minute, long nowMs) {
+        return nextOccurrence(dayOfWeek, hour, minute, nowMs, TimeZone.getDefault());
+    }
+
+    /**
+     * Rolls a stored weekly trigger forward until it is in the future, keeping
+     * the same local time-of-day and weekday (DST safe because it steps in
+     * calendar days rather than fixed milliseconds).
+     */
+    public static long rollForwardWeekly(long previousTriggerMs, long nowMs, TimeZone tz) {
+        if (previousTriggerMs > nowMs) return previousTriggerMs;
+        Calendar c = Calendar.getInstance(tz);
+        c.setTimeInMillis(previousTriggerMs);
+        int guard = 0;
+        while (c.getTimeInMillis() <= nowMs && guard++ < 520) {
+            c.add(Calendar.DAY_OF_MONTH, 7);
+        }
+        return c.getTimeInMillis();
+    }
+
+    public static long rollForwardWeekly(long previousTriggerMs, long nowMs) {
+        return rollForwardWeekly(previousTriggerMs, nowMs, TimeZone.getDefault());
+    }
+
+    /** Day of week (0=Sun..6=Sat) for a timestamp. */
+    public static int dayOfWeek(long atMs, TimeZone tz) {
+        Calendar c = Calendar.getInstance(tz);
+        c.setTimeInMillis(atMs);
+        return c.get(Calendar.DAY_OF_WEEK) - 1;
+    }
+}
+
+
+===== FILE: ./android/app/src/main/java/com/mylifeos/app/rise/scheduler/RiseAlarmStore.java =====
+package com.mylifeos.app.rise.scheduler;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.util.Log;
+
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+/**
+ * RiseAlarmStore — native mirror of every scheduled alarm shot.
+ *
+ * The old boot restore read a Capacitor localStorage blob that never contained
+ * the sound / loudness / weekday of a shot, so reboots either lost alarms or
+ * restored them wrong. Every shot scheduled through RiseAlarmScheduler is now
+ * persisted here with the full payload, which is what BootReceiver replays.
+ */
+public final class RiseAlarmStore {
+
+    private static final String TAG   = "RiseAlarmStore";
+    private static final String PREFS = "rise_native_shots";
+    private static final String KEY   = "shots"; // JSONObject: id -> shot
+
+    private RiseAlarmStore() {}
+
+    public static class Shot {
+        public int     id;
+        public long    timeInMillis;
+        public String  uuid;
+        public String  title;
+        public String  body;
+        public String  soundUri;
+        public boolean extraLoud;
+        /** 0=Sun..6=Sat for recurring weekly shots, -1 for one-shot alarms. */
+        public int     dayOfWeek = -1;
+
+        JSONObject toJson() throws Exception {
+            JSONObject o = new JSONObject();
+            o.put("id", id);
+            o.put("timeInMillis", timeInMillis);
+            o.put("uuid", uuid);
+            o.put("title", title);
+            o.put("body", body);
+            if (soundUri != null) o.put("soundUri", soundUri);
+            o.put("extraLoud", extraLoud);
+            o.put("dayOfWeek", dayOfWeek);
+            return o;
+        }
+
+        static Shot fromJson(JSONObject o) {
+            Shot s = new Shot();
+            s.id           = o.optInt("id", 0);
+            s.timeInMillis = o.optLong("timeInMillis", 0L);
+            s.uuid         = o.optString("uuid", String.valueOf(s.id));
+            s.title        = o.optString("title", "Rise Alarm");
+            s.body         = o.optString("body", "Wake up!");
+            String sound   = o.optString("soundUri", "");
+            s.soundUri     = sound.isEmpty() || "null".equals(sound) ? null : sound;
+            s.extraLoud    = o.optBoolean("extraLoud", false);
+            s.dayOfWeek    = o.optInt("dayOfWeek", -1);
+            return s;
+        }
+    }
+
+    private static SharedPreferences sp(Context ctx) {
+        return ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static JSONObject readAll(Context ctx) {
+        try {
+            String raw = sp(ctx).getString(KEY, "{}");
+            return new JSONObject(raw == null || raw.isEmpty() ? "{}" : raw);
+        } catch (Throwable t) {
+            return new JSONObject();
+        }
+    }
+
+    public static synchronized void save(Context ctx, Shot shot) {
+        try {
+            JSONObject all = readAll(ctx);
+            all.put(String.valueOf(shot.id), shot.toJson());
+            sp(ctx).edit().putString(KEY, all.toString()).apply();
+        } catch (Throwable t) {
+            Log.w(TAG, "save failed for id=" + shot.id, t);
+        }
+    }
+
+    public static synchronized void remove(Context ctx, int id) {
+        try {
+            JSONObject all = readAll(ctx);
+            all.remove(String.valueOf(id));
+            sp(ctx).edit().putString(KEY, all.toString()).apply();
+        } catch (Throwable t) {
+            Log.w(TAG, "remove failed for id=" + id, t);
+        }
+    }
+
+    public static synchronized Shot get(Context ctx, int id) {
+        try {
+            JSONObject all = readAll(ctx);
+            JSONObject o = all.optJSONObject(String.valueOf(id));
+            return o == null ? null : Shot.fromJson(o);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static synchronized List<Shot> all(Context ctx) {
+        List<Shot> out = new ArrayList<>();
+        JSONObject all = readAll(ctx);
+        for (Iterator<String> it = all.keys(); it.hasNext(); ) {
+            JSONObject o = all.optJSONObject(it.next());
+            if (o != null) out.add(Shot.fromJson(o));
+        }
+        return out;
+    }
+}
+
+
+===== FILE: ./src/lib/capacitor/nightToRiseBridge.ts =====
+/**
+ * nightToRiseBridge — JS → native bridge for syncing Night-to-Rise config
+ * into Android SharedPreferences, so the ShieldAccessibilityService can
+ * enforce the lock at the OS level. Web/iOS: silent no-op.
+ *
+ * Native plugin name: `NightToRise` with methods setConfig({ json }),
+ * setRiseAlarm({ epochMillis }), and consumePendingBreak() [NEW].
+ */
+
+import { registerPlugin, Capacitor } from '@capacitor/core';
+import type { NightToRiseConfig } from '@/components/rise/night-to-rise/types';
+
+interface NightToRiseNativePlugin {
+  setConfig(options: { json: string }): Promise<void>;
+  setRiseAlarm(options: { epochMillis: number }): Promise<void>;
+  consumePendingBreak(): Promise<{ broke: boolean }>;
+  getStatus(): Promise<NativeLockStatus>;
+  getDiagnostics(): Promise<NativeDiagnostics>;
+}
+
+/** Live self-test of the native enforcement chain. */
+export interface NativeDiagnostics {
+  enabled: boolean;
+  configured: boolean;
+  phase: string;
+  locking: boolean;
+  endTimeMs: number;
+  sleepGuardEnabled: boolean;
+  riseGuardEnabled: boolean;
+  sleepTime: string;
+  riseAlarmMs: number;
+  allowedCount: number;
+  accessibilityEnabled: boolean;
+  accessibilityConnected: boolean;
+  overlayGranted: boolean;
+  guardServiceSynced: boolean;
+  guardServiceRunning: boolean;
+  lastPhase: string;
+  lastLocking: boolean;
+  lastForegroundPackage: string | null;
+  lastGuardPassAt: number;
+  lastUsageAccess: boolean;
+  lastBlockAt: number;
+  lastBlockedPkg: string | null;
+  lastError: string | null;
+}
+
+export interface NativeLockStatus {
+  enabled: boolean;
+  phase: 'OFF' | 'ARMED' | 'SLEEP_LOCK' | 'RISE_LOCK' | 'PAUSED' | 'INACTIVE_DAY';
+  locking: boolean;
+  endTimeMs: number;
+  accessibilityEnabled: boolean;
+}
+
+const Plugin = registerPlugin<NightToRiseNativePlugin>('NightToRise');
+
+const isAndroid = Capacitor.getPlatform() === 'android';
+
+export const nightToRiseBridge = {
+  async setConfig(cfg: NightToRiseConfig): Promise<void> {
+    if (!isAndroid) return;
+    try { await Plugin.setConfig({ json: JSON.stringify(cfg) }); } catch (e) {
+      console.warn('[NightToRise bridge] setConfig failed', e);
+    }
+  },
+  async setRiseAlarm(epochMillis: number): Promise<void> {
+    if (!isAndroid) return;
+    try { await Plugin.setRiseAlarm({ epochMillis }); } catch (e) {
+      console.warn('[NightToRise bridge] setRiseAlarm failed', e);
+    }
+  },
+  /**
+   * NEW: check whether the native block screen's "Emergency unlock" was
+   * tapped since the last check. Call on app mount + on resume (visibility
+   * change) so a break taken while the app wasn't in the foreground still
+   * gets recorded against the streak.
+   */
+  async consumePendingBreak(): Promise<boolean> {
+    if (!isAndroid) return false;
+    try {
+      const res = await Plugin.consumePendingBreak();
+      return res.broke;
+    } catch (e) {
+      console.warn('[NightToRise bridge] consumePendingBreak failed', e);
+      return false;
+    }
+  },
+  /** Real native enforcement state — reflects what the OS is actually doing. */
+  async getStatus(): Promise<NativeLockStatus | null> {
+    if (!isAndroid) return null;
+    try {
+      return await Plugin.getStatus();
+    } catch (e) {
+      console.warn('[NightToRise bridge] getStatus failed', e);
+      return null;
+    }
+  },
+  /**
+   * Full enforcement self-test. Also self-heals on the native side by
+   * re-syncing the background guard service before reporting.
+   */
+  async getDiagnostics(): Promise<NativeDiagnostics | null> {
+    if (!isAndroid) return null;
+    try {
+      return await Plugin.getDiagnostics();
+    } catch (e) {
+      console.warn('[NightToRise bridge] getDiagnostics failed', e);
+      return null;
+    }
+  },
+};
+
+
+===== FILE: ./src/components/rise/night-to-rise/types.ts =====
+export type ScheduleMode = 'everyday' | 'weekdays' | 'custom';
+
+export interface AllowedApp {
+  id: string;
+  name: string;
+  icon?: string;
+}
+
+export interface NightToRiseConfig {
+  enabled: boolean;
+  sleepTime: string; // "HH:MM" 24h
+  sleepLockMinutesBefore: number;
+  riseLockMinutesAfter: number;
+  /**
+   * The ONLY apps that may be opened while a lock window is active.
+   * Everything else is blocked by default (allowlist model).
+   */
+  allowedApps: AllowedApp[];
+  sleepBlockMessage: string;
+  riseBlockMessage: string;
+  scheduleMode: ScheduleMode;
+  scheduleDays: number[]; // 0=Sun..6=Sat
+  strictMode: boolean;
+  showStreakOnBlock: boolean;
+  pausedUntil?: string | null; // ISO date
+  configured: boolean;
+  /** PHASE 3 — share nightly result with the user's Rise group feed. */
+  shareWithGroup: boolean;
+  /**
+   * NEW: dates ("YYYY-MM-DD") "Pause for one night" was used, kept for the
+   * last ~14 entries. Used to enforce a 1-pause-per-week limit so the
+   * feature can't be used to silently disable protection every night.
+   */
+  pauseHistory: string[];
+  /** SECTION 4 — strict mode 24h commitment lock (ISO date) while enabled. */
+  strictLockedUntil?: string | null;
+  /** SECTION 4 — pending emergency-unlock request (epoch ms) under strict mode. */
+  strictUnlockRequestedAt?: number | null;
+  /** SECTION 4 — chronotype onboarding result. */
+  chronotype?: 'lark' | 'neutral' | 'owl' | null;
+  chronotypeAnswered?: boolean;
+  /** Gradual Shift Assistant — intermediate target while easing to sleepTime. */
+  shiftTargetTime?: string | null;
+  /** Custom-schedule weekend target (used for the social-jetlag warning). */
+  weekendSleepTime?: string | null;
+  /** Alarm volume ramp length in seconds (mirrored to native prefs). */
+  alarmRampSeconds?: number;
+  /** Which guards the user wants. Either, both, or one alone. */
+  sleepGuardEnabled: boolean;
+  riseGuardEnabled: boolean;
+  /**
+   * How Sleep Guard ends:
+   *  - 'until-alarm' → keeps holding right up to the rise alarm
+   *  - 'duration'    → switches itself off N minutes after it started
+   */
+  sleepGuardEndMode: 'until-alarm' | 'duration';
+  /** Minutes Sleep Guard runs when sleepGuardEndMode === 'duration'. */
+  sleepGuardDurationMinutes: number;
+}
+
+export type SleepGuardEndMode = NightToRiseConfig['sleepGuardEndMode'];
+
+
+/** Popular apps, used as a web fallback list inside the app picker. */
+export const SUGGESTED_BLOCK_APPS: AllowedApp[] = [
+  { id: 'com.facebook.katana', name: 'Facebook' },
+  { id: 'com.instagram.android', name: 'Instagram' },
+  { id: 'com.zhiliaoapp.musically', name: 'TikTok' },
+  { id: 'com.google.android.youtube', name: 'YouTube' },
+  { id: 'com.snapchat.android', name: 'Snapchat' },
+  { id: 'com.twitter.android', name: 'X (Twitter)' },
+  { id: 'com.tencent.ig', name: 'PUBG Mobile' },
+  { id: 'com.dts.freefireth', name: 'Free Fire' },
+  { id: 'com.netflix.mediaclient', name: 'Netflix' },
+  { id: 'com.reddit.frontpage', name: 'Reddit' },
+];
+
+export const DEFAULT_CONFIG: NightToRiseConfig = {
+  enabled: false,
+  sleepTime: '22:30',
+  sleepLockMinutesBefore: 30,
+  riseLockMinutesAfter: 30,
+  allowedApps: [
+    { id: 'com.android.dialer', name: 'Phone' },
+    { id: 'com.android.deskclock', name: 'Clock' },
+    { id: 'com.google.android.deskclock', name: 'Clock (Google)' },
+  ],
+
+  sleepBlockMessage: 'Time to rest. Put the phone down. 🌙',
+  riseBlockMessage: 'Start your morning right. No scrolling yet. 🌅',
+  scheduleMode: 'everyday',
+  scheduleDays: [0, 1, 2, 3, 4, 5, 6],
+  strictMode: false,
+  showStreakOnBlock: true,
+  pausedUntil: null,
+  configured: false,
+  shareWithGroup: false,
+  pauseHistory: [],
+  strictLockedUntil: null,
+  strictUnlockRequestedAt: null,
+  chronotype: null,
+  chronotypeAnswered: false,
+  shiftTargetTime: null,
+  weekendSleepTime: null,
+  alarmRampSeconds: 45,
+  sleepGuardEnabled: true,
+  riseGuardEnabled: true,
+  sleepGuardEndMode: 'until-alarm',
+  sleepGuardDurationMinutes: 180,
+};
+
+/** SECTION 4 — strict mode commits the user for 24 hours. */
+export const STRICT_LOCK_MS = 24 * 60 * 60 * 1000;
+
+/** Reasons offered when pausing for one night. */
+export const PAUSE_REASONS = ['Travel', 'Emergency', 'Illness', 'Other'] as const;
+export type PauseReason = (typeof PAUSE_REASONS)[number];
+
+/**
+ * Apps that can never be blocked, for user safety. Enforced in the UI so a
+ * user can't lock themselves out of calls or the alarm clock.
+ */
+export const ALWAYS_ALLOWED_IDS = [
+  'com.android.phone',
+  'com.android.dialer',
+  'com.google.android.dialer',
+  'com.android.server.telecom',
+  'com.android.emergency',
+  'com.android.deskclock',
+  'com.google.android.deskclock',
+];
+
+
+export const STORAGE_KEY = 'night_to_rise_config_v1';
+
+/** ISO week key (e.g. "2026-W32") — used for the weekly pause limit. */
+export function getIsoWeekKey(d: Date): string {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+/** Max "Pause for one night" uses allowed within a single ISO week. */
+export const MAX_PAUSES_PER_WEEK = 1;
+
+/** PHASE 2 — strict mode: emergency unlock only becomes available after this
+ *  cool-down (10 minutes), instead of being hidden entirely. */
+export const STRICT_UNLOCK_DELAY_MS = 10 * 60 * 1000;
+
+
+===== FILE: ./src/components/rise/night-to-rise/useNightToRise.ts =====
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  DEFAULT_CONFIG,
+  NightToRiseConfig,
+  STORAGE_KEY,
+  getIsoWeekKey,
+  MAX_PAUSES_PER_WEEK,
+  STRICT_LOCK_MS,
+  STRICT_UNLOCK_DELAY_MS,
+  type PauseReason,
+} from './types';
+import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
+import { computeNightWindows, relevantAlarmOccurrenceMs } from './timeMath';
+import type { NextRiseAlarm } from './nextRiseAlarm';
+
+function load(): NightToRiseConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULT_CONFIG;
+    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_CONFIG;
+  }
+}
+
+/** Keys that stay editable even while strict mode holds the settings locked. */
+const STRICT_ALLOWED_KEYS = new Set<keyof NightToRiseConfig>([
+  'strictUnlockRequestedAt',
+  'strictLockedUntil',
+  'strictMode',
+]);
+
+/**
+ * @param riseAlarm the nearest upcoming alarm (weekday-aware) from
+ * useNextRiseAlarm(). This hook is the ONLY writer of the alarm reference that
+ * native enforcement reads, so the two can never disagree.
+ */
+export function useNightToRise(riseAlarm?: NextRiseAlarm | null) {
+  const riseAlarmTime = riseAlarm?.time ?? null;
+  const [config, setConfig] = useState<NightToRiseConfig>(load);
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  /** True while the 24h strict-mode commitment is still running. */
+  const strictLocked = useMemo(() => {
+    if (!config.strictMode) return false;
+    const until = config.strictLockedUntil ? new Date(config.strictLockedUntil).getTime() : 0;
+    return until > now.getTime();
+  }, [config.strictMode, config.strictLockedUntil, now]);
+
+  const strictLockRemainingMs = useMemo(() => {
+    if (!strictLocked || !config.strictLockedUntil) return 0;
+    return Math.max(0, new Date(config.strictLockedUntil).getTime() - now.getTime());
+  }, [strictLocked, config.strictLockedUntil, now]);
+
+  const writeConfig = useCallback((next: NightToRiseConfig) => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* quota */ }
+    void nightToRiseBridge.setConfig(next);
+  }, []);
+
+  const update = useCallback((patch: Partial<NightToRiseConfig>) => {
+    setConfig((prev) => {
+      // SECTION 4 — enforcement, not just UI dimming: reject settings changes
+      // while the strict-mode commitment window is active.
+      const lockedUntil = prev.strictLockedUntil ? new Date(prev.strictLockedUntil).getTime() : 0;
+      const isLocked = prev.strictMode && lockedUntil > Date.now();
+      if (isLocked) {
+        const illegal = (Object.keys(patch) as (keyof NightToRiseConfig)[]).filter(
+          (k) => !STRICT_ALLOWED_KEYS.has(k),
+        );
+        if (illegal.length) return prev;
+        // Strict mode itself cannot be switched off before the window ends.
+        if ('strictMode' in patch && patch.strictMode === false) return prev;
+      }
+      const next = { ...prev, ...patch, configured: true };
+      writeConfig(next);
+      return next;
+    });
+  }, [writeConfig]);
+
+  // Push current config to native once on mount (after restart).
+  useEffect(() => { void nightToRiseBridge.setConfig(config); /* eslint-disable-next-line */ }, []);
+
+  // Keep the native scheduler aware of the next rise-alarm occurrence AND of
+  // the weekdays that alarm actually rings on, so Rise Guard never locks the
+  // phone on a morning with no alarm.
+  const alarmDaysKey = (riseAlarm?.daysOfWeek ?? []).join(',');
+  useEffect(() => {
+    if (!riseAlarmTime) {
+      void nightToRiseBridge.setRiseAlarm(0, []);
+      return;
+    }
+    const days = alarmDaysKey ? alarmDaysKey.split(',').map(Number) : [];
+    void nightToRiseBridge.setRiseAlarm(
+      riseAlarm?.atMs && riseAlarm.atMs > 0
+        ? riseAlarm.atMs
+        : relevantAlarmOccurrenceMs(riseAlarmTime, config.riseLockMinutesAfter, now),
+      days,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riseAlarmTime, riseAlarm?.atMs, alarmDaysKey, config.riseLockMinutesAfter]);
+
+  /** The target actually enforced tonight (gradual-shift aware). */
+  const effectiveSleepTime = config.shiftTargetTime || config.sleepTime;
+
+  const windows = useMemo(
+    () => computeNightWindows({
+      sleepTime: effectiveSleepTime,
+      riseTime: riseAlarmTime ?? null,
+      lockBeforeMin: config.sleepLockMinutesBefore,
+      lockAfterMin: config.riseLockMinutesAfter,
+      now,
+      // NEW (v4): wire the independent guard toggles + Sleep Guard end mode
+      // into the in-app time computation, so the status pill/countdown shown
+      // here always matches what native enforcement is actually doing.
+      sleepGuardEnabled: config.sleepGuardEnabled,
+      riseGuardEnabled: config.riseGuardEnabled,
+      sleepEndMode: config.sleepGuardEndMode,
+      sleepDurationMin: config.sleepGuardDurationMinutes,
+      // Weekdays the alarm rings on, and the same safety cap native uses, so
+      // the countdown on screen can never drift from real enforcement.
+      riseDays: riseAlarm?.daysOfWeek ?? [],
+      safetyCapMinutes: Math.max(60, (config.safetyCapHours ?? 10) * 60),
+    }),
+    [
+      effectiveSleepTime, riseAlarmTime, config.sleepLockMinutesBefore, config.riseLockMinutesAfter, now,
+      config.sleepGuardEnabled, config.riseGuardEnabled, config.sleepGuardEndMode, config.sleepGuardDurationMinutes,
+      config.safetyCapHours, riseAlarm?.daysOfWeek,
+    ],
+  );
+
+  const status = useMemo(() => {
+    if (!config.enabled || !config.configured) {
+      return { phase: 'off' as const, label: null as string | null, endsAt: null as Date | null };
+    }
+    if (config.pausedUntil && new Date(config.pausedUntil) > now) {
+      return { phase: 'paused' as const, label: 'Paused tonight', endsAt: new Date(config.pausedUntil) };
+    }
+    const day = now.getDay();
+    const active = config.scheduleMode === 'everyday'
+      ? true
+      : config.scheduleMode === 'weekdays'
+        ? day >= 1 && day <= 5
+        : config.scheduleDays.includes(day);
+
+    if (!active) return { phase: 'inactive-day' as const, label: 'Not scheduled today', endsAt: null };
+
+    if (windows.sleepActive) {
+      return { phase: 'sleep-lock' as const, label: 'Sleep lock active', endsAt: null };
+    }
+    if (windows.riseActive) {
+      return { phase: 'rise-lock' as const, label: 'Rise lock active', endsAt: null };
+    }
+    return { phase: 'armed' as const, label: 'Armed', endsAt: null };
+  }, [config, now, windows]);
+
+  const isLockEnforcing = status.phase === 'sleep-lock' || status.phase === 'rise-lock';
+
+  const canPauseTonight = useMemo(() => {
+    if (strictLocked) return false;
+    const weekKey = getIsoWeekKey(new Date());
+    const usesThisWeek = config.pauseHistory.filter((d) => getIsoWeekKey(new Date(d)) === weekKey).length;
+    return usesThisWeek < MAX_PAUSES_PER_WEEK;
+  }, [config.pauseHistory, strictLocked]);
+
+  const pausesThisWeek = useMemo(() => {
+    const weekKey = getIsoWeekKey(new Date());
+    return config.pauseHistory.filter((d) => getIsoWeekKey(new Date(d)) === weekKey).length;
+  }, [config.pauseHistory]);
+
+  const pauseTonight = useCallback((_reason?: PauseReason) => {
+    if (!canPauseTonight) return false;
+    const next = new Date();
+    next.setHours(12, 0, 0, 0);
+    if (next < new Date()) next.setDate(next.getDate() + 1);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    update({
+      pausedUntil: next.toISOString(),
+      pauseHistory: [...config.pauseHistory.slice(-13), todayIso],
+    });
+    return true;
+  }, [update, canPauseTonight, config.pauseHistory]);
+
+  /** Enable strict mode with the 24h commitment window. */
+  const enableStrictMode = useCallback(() => {
+    setConfig((prev) => {
+      const next: NightToRiseConfig = {
+        ...prev,
+        configured: true,
+        strictMode: true,
+        strictLockedUntil: new Date(Date.now() + STRICT_LOCK_MS).toISOString(),
+        strictUnlockRequestedAt: null,
+      };
+      writeConfig(next);
+      return next;
+    });
+  }, [writeConfig]);
+
+  const disableStrictMode = useCallback(() => {
+    setConfig((prev) => {
+      const until = prev.strictLockedUntil ? new Date(prev.strictLockedUntil).getTime() : 0;
+      if (until > Date.now()) return prev; // still committed
+      const next: NightToRiseConfig = {
+        ...prev,
+        strictMode: false,
+        strictLockedUntil: null,
+        strictUnlockRequestedAt: null,
+      };
+      writeConfig(next);
+      return next;
+    });
+  }, [writeConfig]);
+
+  /** Emergency unlock — a 10 minute delayed unlock, persisted so it survives
+   *  navigation / the activity being destroyed. */
+  const requestEmergencyUnlock = useCallback(() => {
+    update({ strictUnlockRequestedAt: Date.now() });
+  }, [update]);
+
+  const emergencyUnlockMsLeft = useMemo(() => {
+    if (!config.strictUnlockRequestedAt) return null;
+    return Math.max(0, config.strictUnlockRequestedAt + STRICT_UNLOCK_DELAY_MS - now.getTime());
+  }, [config.strictUnlockRequestedAt, now]);
+
+  return {
+    config,
+    update,
+    status,
+    windows,
+    effectiveSleepTime,
+    isLockEnforcing,
+    pauseTonight,
+    canPauseTonight,
+    pausesThisWeek,
+    strictLocked,
+    strictLockRemainingMs,
+    enableStrictMode,
+    disableStrictMode,
+    requestEmergencyUnlock,
+    emergencyUnlockMsLeft,
+  };
+}
+
+
+===== FILE: ./src/components/rise/night-to-rise/nextRiseAlarm.ts =====
+/**
+ * nextRiseAlarm — the SINGLE source of truth for "which Rise alarm does Sleep
+ * to Rise hand off to, and when does it ring next".
+ *
+ * Fixes two long-standing defects:
+ *  1. Two places used to tell native when the alarm is. The Rise page computed
+ *     it correctly (respecting the chosen weekdays) while the Sleep to Rise
+ *     page recomputed a day-blind value every 30s and overwrote it. Only
+ *     `useNightToRise` writes the alarm to native now, and it uses this module.
+ *  2. The Sleep to Rise page took the FIRST enabled alarm in local storage
+ *     rather than the NEAREST upcoming one, and never looked at the alarms
+ *     saved in the user's account. Both sources are merged here.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+
+export interface AlarmLike {
+  alarm_time?: string | null;
+  time?: string | null;
+  is_enabled?: boolean;
+  enabled?: boolean;
+  days_of_week?: number[] | null;
+  daysOfWeek?: number[] | null;
+}
+
+export interface NormalizedAlarm {
+  /** "HH:MM" local time. */
+  time: string;
+  /** 0=Sun..6=Sat. Empty array means "every day". */
+  daysOfWeek: number[];
+}
+
+export interface NextRiseAlarm extends NormalizedAlarm {
+  /** Epoch ms of the next occurrence, weekday-aware. */
+  atMs: number;
+}
+
+/** Keeps only enabled alarms that carry a usable time. */
+export function normalizeAlarms(list: unknown): NormalizedAlarm[] {
+  if (!Array.isArray(list)) return [];
+  const out: NormalizedAlarm[] = [];
+  for (const raw of list as AlarmLike[]) {
+    if (!raw) continue;
+    const enabled = raw.is_enabled ?? raw.enabled ?? true;
+    if (!enabled) continue;
+    const time = (raw.alarm_time || raw.time || '').trim();
+    if (!/^\d{1,2}:\d{2}/.test(time)) continue;
+    const days = (raw.days_of_week ?? raw.daysOfWeek ?? []) as number[];
+    out.push({
+      time: time.slice(0, 5),
+      daysOfWeek: Array.isArray(days) ? days.filter((d) => d >= 0 && d <= 6) : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * Nearest upcoming occurrence across every enabled alarm, honouring each
+ * alarm's own weekday list (an empty list means the alarm repeats daily).
+ */
+export function computeNextRiseAlarm(
+  alarms: NormalizedAlarm[],
+  from: Date = new Date(),
+): NextRiseAlarm | null {
+  let best: NextRiseAlarm | null = null;
+  const today = from.getDay();
+  for (const alarm of alarms) {
+    const [h, m] = alarm.time.split(':').map(Number);
+    for (let offset = 0; offset <= 7; offset++) {
+      const day = (today + offset) % 7;
+      if (alarm.daysOfWeek.length > 0 && !alarm.daysOfWeek.includes(day)) continue;
+      const when = new Date(from);
+      when.setDate(when.getDate() + offset);
+      when.setHours(h || 0, m || 0, 0, 0);
+      if (when.getTime() <= from.getTime()) continue;
+      if (!best || when.getTime() < best.atMs) {
+        best = { time: alarm.time, daysOfWeek: alarm.daysOfWeek, atMs: when.getTime() };
+      }
+      break;
+    }
+  }
+  return best;
+}
+
+function readLocalAlarms(): NormalizedAlarm[] {
+  try {
+    const raw = localStorage.getItem('local_alarms');
+    return raw ? normalizeAlarms(JSON.parse(raw)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reactive next-alarm reader: merges local alarms with the account's saved
+ * alarms, recomputes on storage changes and once a minute.
+ */
+export function useNextRiseAlarm(): NextRiseAlarm | null {
+  const [remote, setRemote] = useState<NormalizedAlarm[]>([]);
+  const [next, setNext] = useState<NextRiseAlarm | null>(null);
+
+  const recompute = useCallback((remoteAlarms: NormalizedAlarm[]) => {
+    const all = [...readLocalAlarms(), ...remoteAlarms];
+    setNext((prev) => {
+      const candidate = computeNextRiseAlarm(all);
+      if (
+        prev && candidate
+        && prev.atMs === candidate.atMs
+        && prev.time === candidate.time
+        && prev.daysOfWeek.join(',') === candidate.daysOfWeek.join(',')
+      ) return prev;
+      return candidate;
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: auth } = await supabase.auth.getUser();
+        if (!auth?.user) return;
+        const { data } = await supabase
+          .from('rise_alarms')
+          .select('alarm_time, days_of_week, is_enabled')
+          .eq('user_id', auth.user.id);
+        if (!cancelled && data) setRemote(normalizeAlarms(data));
+      } catch { /* offline — local alarms still apply */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    recompute(remote);
+    const id = setInterval(() => recompute(remote), 60_000);
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || e.key === 'local_alarms') recompute(remote);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => { clearInterval(id); window.removeEventListener('storage', onStorage); };
+  }, [remote, recompute]);
+
+  return next;
+}
+
+
+===== FILE: ./src/components/rise/night-to-rise/timeMath.ts =====
+/**
+ * timeMath — the SINGLE source of truth for every Sleep-to-Rise time
+ * calculation (Section 0.2).
+ *
+ * Everything here works in *local* minutes-of-day (0..1439) and treats the
+ * clock as a circle, so windows that cross midnight (e.g. sleep 23:30 → rise
+ * 06:00) never produce negative or wrapped-around durations.
+ *
+ * Rules used everywhere:
+ *   - `parseHM("23:30")`            → 1410
+ *   - `forwardDelta(from, to)`      → minutes going *forward* from `from` to
+ *                                     `to`, always in [0, 1439]. This is what
+ *                                     makes midnight rollover correct: at
+ *                                     00:30 the delta to 23:30 is 1380, and the
+ *                                     delta from 23:30 to 00:30 is 60.
+ *   - a window [start, end) is active when
+ *     `forwardDelta(start, now) < forwardDelta(start, end)`.
+ *
+ * All four displays required by the spec are derived from these two helpers:
+ *   (a) time until Sleep Guard activates   → untilSleepGuard
+ *   (b) time left once Sleep Guard active  → sleepGuardRemaining
+ *   (c) time until the Rise alarm          → untilRiseAlarm
+ *   (d) time left in the post-wake lock    → riseGuardRemaining
+ */
+
+export const MINUTES_PER_DAY = 1440;
+
+/** "HH:MM" (24h) → minutes of day. Invalid input degrades to 0. */
+export function parseHM(value: string | null | undefined): number {
+  if (!value) return 0;
+  const [h, m] = value.split(':').map((n) => Number(n));
+  const hh = Number.isFinite(h) ? h : 0;
+  const mm = Number.isFinite(m) ? m : 0;
+  return (((hh * 60 + mm) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+}
+
+/** Local minutes-of-day for a Date (defaults to now). */
+export function minutesOfDay(d: Date = new Date()): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Normalise any minute value onto [0, 1439]. */
+export function norm(min: number): number {
+  return ((Math.round(min) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+}
+
+/** Minutes going forward around the clock from `from` to `to`. Always >= 0. */
+export function forwardDelta(from: number, to: number): number {
+  return norm(to - from);
+}
+
+/** Is `now` inside the half-open circular window [start, end)? */
+export function inWindow(now: number, start: number, end: number): boolean {
+  const span = forwardDelta(start, end);
+  if (span === 0) return false;
+  return forwardDelta(start, now) < span;
+}
+
+/** Length of the circular window [start, end); a full day when start === end. */
+export function windowSpan(start: number, end: number): number {
+  const span = forwardDelta(start, end);
+  return span === 0 ? MINUTES_PER_DAY : span;
+}
+
+/** Progress through a circular window, clamped to [0, 1]. */
+export function windowProgress(now: number, start: number, end: number): number {
+  const span = windowSpan(start, end);
+  return Math.min(1, Math.max(0, forwardDelta(start, now) / span));
+}
+
+/** "2h 10m" / "18m" / "now". */
+export function formatGap(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m === 0) return 'now';
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  if (h === 0) return `${rest}m`;
+  if (rest === 0) return `${h}h`;
+  return `${h}h ${rest}m`;
+}
+
+/** 12-hour clock label for a minutes-of-day value. */
+export function formatClock(minutesOfDayValue: number): string {
+  const v = norm(minutesOfDayValue);
+  const h = Math.floor(v / 60);
+  const m = v % 60;
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+
+export interface NightWindowInput {
+  /** "HH:MM" target sleep time. */
+  sleepTime: string;
+  /** "HH:MM" rise alarm, or null when no alarm is set. */
+  riseTime: string | null;
+  /** Minutes the sleep lock starts *before* the target sleep time. */
+  lockBeforeMin: number;
+  /** Minutes the rise lock stays on *after* the alarm. */
+  lockAfterMin: number;
+  /** Current time (defaults to now). */
+  now?: Date;
+  /** User can run Sleep Guard, Rise Guard, or both. Default: both on. */
+  sleepGuardEnabled?: boolean;
+  riseGuardEnabled?: boolean;
+  /** 'until-alarm' (default) or 'duration' — Sleep Guard auto-off. */
+  sleepEndMode?: 'until-alarm' | 'duration';
+  /** Minutes Sleep Guard runs in 'duration' mode. */
+  sleepDurationMin?: number;
+  /** Weekdays (0=Sun) the alarm rings on. Empty = every day. */
+  riseDays?: number[];
+  /**
+   * Hard ceiling (minutes) on Sleep Guard when no alarm is attached. Measured
+   * from the LOCK START, exactly like native enforcement, so the on-screen
+   * countdown and the phone's behaviour can never drift apart.
+   */
+  safetyCapMinutes?: number;
+}
+
+
+export interface NightWindows {
+  nowMin: number;
+  /** Sleep Guard window. */
+  sleepStart: number;
+  sleepEnd: number;
+  sleepActive: boolean;
+  /** Rise Guard (post-alarm) window. Null when no alarm is set. */
+  riseStart: number | null;
+  riseEnd: number | null;
+  riseActive: boolean;
+  /** (a) minutes until Sleep Guard turns on; 0 while it is already on. */
+  untilSleepGuard: number;
+  /** (b) minutes left of the active Sleep Guard window; 0 when inactive. */
+  sleepGuardRemaining: number;
+  /** (c) minutes until the Rise alarm fires; null when no alarm. */
+  untilRiseAlarm: number | null;
+  /** (d) minutes left of the active Rise Guard lock; 0 when inactive. */
+  riseGuardRemaining: number;
+  /** Whole protected span (sleep lock start → rise lock end) and progress. */
+  nightStart: number;
+  nightEnd: number;
+  nightProgress: number;
+  inNight: boolean;
+}
+
+/**
+ * Computes every Sleep-to-Rise time value from one consistent model.
+ * With no rise alarm, Sleep Guard ends at the safety cap measured from the
+ * LOCK START — the same rule native enforcement applies.
+ */
+export function computeNightWindows({
+  sleepTime,
+  riseTime,
+  lockBeforeMin,
+  lockAfterMin,
+  now = new Date(),
+  sleepGuardEnabled = true,
+  riseGuardEnabled = true,
+  sleepEndMode = 'until-alarm',
+  sleepDurationMin = 180,
+  riseDays = [],
+  safetyCapMinutes = 600,
+}: NightWindowInput): NightWindows {
+  const nowMin = minutesOfDay(now);
+  const sleepTarget = parseHM(sleepTime);
+  const sleepStart = norm(sleepTarget - lockBeforeMin);
+
+  const alarm = riseTime ? parseHM(riseTime) : null;
+  // Sleep Guard runs from the wind-down start until the alarm (or the safety
+  // cap, counted from the lock start, when there is no alarm) — unless the
+  // user asked it to switch itself off after a fixed duration, in which case
+  // it ends at whichever comes first: that duration, or the alarm.
+  const cap = Math.max(60, Math.round(safetyCapMinutes));
+  const untilAlarmEnd = alarm !== null ? alarm : norm(sleepStart + cap);
+  let sleepEnd = untilAlarmEnd;
+  if (sleepEndMode === 'duration') {
+    const duration = Math.max(15, Math.round(sleepDurationMin));
+    const alarmSpan = alarm !== null ? windowSpan(sleepStart, alarm) : cap;
+    sleepEnd = duration < alarmSpan ? norm(sleepStart + duration) : untilAlarmEnd;
+  }
+
+  const riseStart = alarm;
+  const riseEnd = alarm !== null ? norm(alarm + lockAfterMin) : null;
+
+  const sleepActive = sleepGuardEnabled && inWindow(nowMin, sleepStart, sleepEnd);
+  // Rise Guard only exists on mornings the alarm actually rings.
+  const alarmRingsToday = riseDays.length === 0 || riseDays.includes(now.getDay());
+  const riseActive =
+    riseGuardEnabled && alarmRingsToday && riseStart !== null && riseEnd !== null && lockAfterMin > 0
+      ? inWindow(nowMin, riseStart, riseEnd)
+      : false;
+
+
+  const nightStart = sleepStart;
+  const nightEnd = riseEnd ?? sleepEnd;
+
+  return {
+    nowMin,
+    sleepStart,
+    sleepEnd,
+    sleepActive,
+    riseStart,
+    riseEnd,
+    riseActive,
+    untilSleepGuard: sleepActive ? 0 : forwardDelta(nowMin, sleepStart),
+    sleepGuardRemaining: sleepActive ? forwardDelta(nowMin, sleepEnd) : 0,
+    untilRiseAlarm: riseStart === null ? null : forwardDelta(nowMin, riseStart),
+    riseGuardRemaining: riseActive && riseEnd !== null ? forwardDelta(nowMin, riseEnd) : 0,
+    nightStart,
+    nightEnd,
+    nightProgress: windowProgress(nowMin, nightStart, nightEnd),
+    inNight: inWindow(nowMin, nightStart, nightEnd),
+  };
+}
+
+/**
+ * Human status line shared by the Night Arc and every other "time remaining"
+ * display, so they can never disagree.
+ */
+export function describeStatus(
+  w: NightWindows,
+  phase: string,
+): { primary: string; secondary: string } {
+  if (phase === 'off') return { primary: 'Protection off', secondary: 'Turn it on to begin' };
+  if (phase === 'paused') return { primary: 'Paused tonight', secondary: 'Protection resumes tomorrow' };
+  if (phase === 'inactive-day') return { primary: 'Not scheduled tonight', secondary: 'No lock will run' };
+  if (phase === 'rise-lock') {
+    return {
+      primary: `Rise Guard active — ${formatGap(w.riseGuardRemaining)} left`,
+      secondary: 'Screens stay closed a little longer',
+    };
+  }
+  if (phase === 'sleep-lock') {
+    return {
+      primary: `Sleep Guard active — ${formatGap(w.sleepGuardRemaining)} left`,
+      secondary: 'Rest now, the phone can wait',
+    };
+  }
+  return {
+    primary: `Sleep Guard in ${formatGap(w.untilSleepGuard)}`,
+    secondary: `Wind-down starts at ${formatClock(w.sleepStart)}`,
+  };
+}
+
+/** Next epoch-ms occurrence of a "HH:MM" local time (today if ahead, else tomorrow). */
+export function nextOccurrenceMs(timeStr: string, from: Date = new Date()): number {
+  const target = parseHM(timeStr);
+  const d = new Date(from);
+  d.setHours(Math.floor(target / 60), target % 60, 0, 0);
+  if (d.getTime() <= from.getTime()) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
+/**
+ * Alarm occurrence that belongs to the currently relevant Sleep-to-Rise
+ * window. During the post-alarm Rise Guard this deliberately returns today's
+ * already-fired alarm instead of jumping to tomorrow. Native enforcement needs
+ * that timestamp to keep Rise Guard active until its configured end.
+ */
+export function relevantAlarmOccurrenceMs(
+  timeStr: string,
+  riseLockMinutesAfter: number,
+  from: Date = new Date(),
+): number {
+  const target = parseHM(timeStr);
+  const occurrence = new Date(from);
+  occurrence.setHours(Math.floor(target / 60), target % 60, 0, 0);
+
+  const elapsed = from.getTime() - occurrence.getTime();
+  const riseWindowMs = Math.max(0, riseLockMinutesAfter) * 60_000;
+  if (elapsed <= 0 || elapsed < riseWindowMs) return occurrence.getTime();
+
+  occurrence.setDate(occurrence.getDate() + 1);
+  return occurrence.getTime();
+}
+
+
+===== FILE: ./src/components/rise/night-to-rise/NightToRiseGuard.tsx =====
+/**
+ * NightToRiseGuard — global full-screen overlay shown whenever the Night-to-Rise
+ * lock window is active. Mounted once at the App root. Reads config from
+ * localStorage via useNightToRise and the next rise alarm from local_alarms.
+ *
+ * PHASE 2: Strict mode is now fully enforced — instead of hiding the override,
+ * it puts the emergency unlock behind a 10 minute cool-down, so a sleepy tap
+ * can never break the night, but a real emergency is never locked out.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Lock, Smartphone, ShieldOff, Flame, Sparkles, Hourglass } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useNightToRise } from './useNightToRise';
+import { useNightToRiseStreak } from './useNightToRiseStreak';
+import { nightToRiseBridge } from '@/lib/capacitor/nightToRiseBridge';
+import { STRICT_UNLOCK_DELAY_MS } from './types';
+import { cn } from '@/lib/utils';
+import { isAndroid, isNative } from '@/lib/capacitor/platform';
+
+function readNextAlarmTime(): string | null {
+  try {
+    const raw = localStorage.getItem('local_alarms');
+    if (!raw) return null;
+    const list = JSON.parse(raw) as Array<{ enabled?: boolean; time?: string }>;
+    const found = list.find((a) => a.enabled && a.time);
+    return found?.time ?? null;
+  } catch { return null; }
+}
+
+const EXEMPT_ROUTES = ['/rise/ring', '/auth', '/reset-password'];
+const STRICT_REQUEST_KEY = 'night_to_rise_strict_request_at';
+
+export function NightToRiseGuard() {
+  const { pathname } = useLocation();
+  const [alarmTime, setAlarmTime] = useState<string | null>(readNextAlarmTime);
+  const { config, status } = useNightToRise(alarmTime);
+  const { streak, recordBreak, recordCleanNight } = useNightToRiseStreak();
+  const [now, setNow] = useState(new Date());
+  const [overridden, setOverridden] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [showPin, setShowPin] = useState(false);
+  const [strictRequestedAt, setStrictRequestedAt] = useState<number | null>(() => {
+    const raw = localStorage.getItem(STRICT_REQUEST_KEY);
+    const n = raw ? Number(raw) : 0;
+    return n > 0 ? n : null;
+  });
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'local_alarms') setAlarmTime(readNextAlarmTime());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Pick up breaks that happened on the NATIVE block screen.
+  useEffect(() => {
+    const checkPendingBreak = async () => {
+      const broke = await nightToRiseBridge.consumePendingBreak();
+      if (broke) recordBreak();
+    };
+    void checkPendingBreak();
+
+    const onVisibility = () => {
+      if (!document.hidden) void checkPendingBreak();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [recordBreak]);
+
+  const isExempt = EXEMPT_ROUTES.some((r) => pathname.startsWith(r));
+  const phase = status.phase;
+  // Android enforcement is native. Never cover LifeOS itself with this legacy
+  // web overlay: the user must always be able to open LifeOS during a lock.
+  const isLocked = !(isNative && isAndroid)
+    && (phase === 'sleep-lock' || phase === 'rise-lock')
+    && !isExempt
+    && !overridden;
+
+  // When phase transitions off after a lock, record a clean night.
+  useEffect(() => {
+    if (phase === 'armed' || phase === 'off' || phase === 'inactive-day') {
+      recordCleanNight();
+    }
+  }, [phase, alarmTime, recordCleanNight]);
+
+  // Reset override + strict request when the window ends.
+  useEffect(() => {
+    if (!isLocked) {
+      setOverridden(false);
+      setShowPin(false);
+      setPinInput('');
+      setStrictRequestedAt(null);
+      try { localStorage.removeItem(STRICT_REQUEST_KEY); } catch { /* noop */ }
+    }
+  }, [isLocked]);
+
+  const message = phase === 'sleep-lock' ? config.sleepBlockMessage : config.riseBlockMessage;
+
+  const endTime = useMemo(() => {
+    if (phase === 'sleep-lock') {
+      const [h, m] = config.sleepTime.split(':').map(Number);
+      const end = new Date();
+      end.setHours(h, m + 30, 0, 0);
+      if (end < now) end.setDate(end.getDate() + 1);
+      return end;
+    }
+    if (phase === 'rise-lock' && alarmTime) {
+      const [h, m] = alarmTime.split(':').map(Number);
+      const end = new Date();
+      end.setHours(h, m + config.riseLockMinutesAfter, 0, 0);
+      if (end < now) end.setDate(end.getDate() + 1);
+      return end;
+    }
+    return null;
+  }, [phase, alarmTime, config, now]);
+
+  const remaining = endTime ? Math.max(0, Math.floor((endTime.getTime() - now.getTime()) / 1000)) : 0;
+  const hh = Math.floor(remaining / 3600);
+  const mm = Math.floor((remaining % 3600) / 60);
+  const ss = remaining % 60;
+  const countdown = hh > 0
+    ? `${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+    : `${mm}:${String(ss).padStart(2, '0')}`;
+
+  // ---- Strict mode: 10 minute delayed emergency unlock ----
+  const strictWaitMs = strictRequestedAt
+    ? Math.max(0, strictRequestedAt + STRICT_UNLOCK_DELAY_MS - now.getTime())
+    : STRICT_UNLOCK_DELAY_MS;
+  const strictReady = strictRequestedAt !== null && strictWaitMs === 0;
+  const strictWaitLabel = `${Math.floor(strictWaitMs / 60000)}:${String(Math.floor((strictWaitMs % 60000) / 1000)).padStart(2, '0')}`;
+
+  const requestStrictUnlock = useCallback(() => {
+    const ts = Date.now();
+    setStrictRequestedAt(ts);
+    try { localStorage.setItem(STRICT_REQUEST_KEY, String(ts)); } catch { /* noop */ }
+  }, []);
+
+  const canOverrideNow = !config.strictMode || strictReady;
+
+  const handleEmergencyUnlock = () => {
+    if (!canOverrideNow) return;
+    // PIN: stored at 'app_lock_pin'; fall back to allowing override without PIN
+    let storedPin: string | null = null;
+    try { storedPin = localStorage.getItem('app_lock_pin'); } catch { /* noop */ }
+    if (storedPin && pinInput !== storedPin) return;
+    recordBreak();
+    setOverridden(true);
+    try { localStorage.removeItem(STRICT_REQUEST_KEY); } catch { /* noop */ }
+  };
+
+  if (!isLocked) return null;
+
+  const dawn = phase === 'rise-lock';
+
+  return (
+    <div className="n2r fixed inset-0 z-[200] flex flex-col overflow-y-auto" data-phase={phase}>
+      {dawn ? (
+        <div
+          className="n2r-dawn-glow pointer-events-none absolute -bottom-32 left-1/2 h-96 w-[130%] -translate-x-1/2 rounded-full bg-warning/30 blur-3xl"
+        />
+      ) : (
+        <div
+          className="pointer-events-none absolute -top-24 left-1/2 h-80 w-[120%] -translate-x-1/2 rounded-full bg-primary/20 blur-3xl"
+        />
+      )}
+
+      <div className="relative flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <div
+          className={cn(
+            'mb-6 flex h-16 w-16 items-center justify-center rounded-3xl',
+            dawn ? 'bg-warning/15 text-warning' : 'bg-primary/10 text-primary',
+          )}
+        >
+          <Lock className="h-7 w-7" />
+        </div>
+
+        <h1 className="n2r-display text-3xl leading-tight">{dawn ? 'Ease into the day' : 'Rest now'}</h1>
+        <p className="mt-3 max-w-sm text-base text-muted-foreground">{message}</p>
+
+        <div className="mt-8">
+          <div className="text-overline">Ends in</div>
+          <div className="n2r-mono mt-2 text-5xl font-bold">{countdown}</div>
+        </div>
+
+        {config.showStreakOnBlock && streak > 0 && (
+          <div className="n2r-pill mt-6" data-tone="dawn">
+            <Flame className="n2r-flame h-4 w-4" /> {streak} night{streak === 1 ? '' : 's'} protected
+          </div>
+        )}
+
+        {config.allowedApps.length > 0 && (
+          <div className="mt-8 w-full max-w-sm">
+            <div className="mb-2 text-overline">Still available</div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {config.allowedApps.map((a) => (
+                <span key={a.id} className="n2r-pill">
+                  <Smartphone className="h-3 w-3" /> {a.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="relative px-6 pb-9">
+        {config.strictMode && !strictReady ? (
+          strictRequestedAt === null ? (
+            <div className="mx-auto flex max-w-xs flex-col items-center gap-3">
+              <div className="n2r-pill">
+                <ShieldOff className="h-3 w-3" /> Strict mode is on
+              </div>
+              <button
+                onClick={requestStrictUnlock}
+                className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+              >
+                Request emergency unlock (10 min wait)
+              </button>
+            </div>
+          ) : (
+            <div className="mx-auto flex max-w-xs flex-col items-center gap-2">
+              <div className="n2r-pill">
+                <Hourglass className="h-3 w-3" /> Unlock available in{' '}
+                <span className="n2r-mono font-semibold">{strictWaitLabel}</span>
+              </div>
+              <p className="text-center text-[11px] text-muted-foreground">
+                Take the ten minutes. Most urges are gone by then.
+              </p>
+            </div>
+          )
+        ) : showPin ? (
+          <div className="mx-auto max-w-xs space-y-2">
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="Emergency PIN"
+              value={pinInput}
+              onChange={(e) => setPinInput(e.target.value)}
+              className="n2r-mono w-full rounded-xl border border-border bg-muted/40 px-4 py-3 text-center text-lg tracking-widest text-foreground placeholder:text-muted-foreground"
+            />
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={() => { setShowPin(false); setPinInput(''); }}>Cancel</Button>
+              <Button className="flex-1" onClick={handleEmergencyUnlock}>Unlock</Button>
+            </div>
+            <p className="text-center text-[11px] text-muted-foreground">
+              Unlocking now starts your streak over. That's alright.
+            </p>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowPin(true)}
+            className="mx-auto block text-xs text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Emergency unlock
+          </button>
+        )}
+
+        <p className="mt-4 text-center text-[11px] text-muted-foreground">
+          Phone and emergency calls are always reachable.
+        </p>
+        <div className="mt-3 flex items-center justify-center gap-1.5 text-overline opacity-60">
+          <Sparkles className="h-3 w-3" /> Sleep to Rise
+        </div>
+      </div>
+    </div>
+  );
+}

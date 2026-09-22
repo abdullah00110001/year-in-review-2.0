@@ -3,18 +3,17 @@ package com.mylifeos.app.nighttorise;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.CountDownTimer;
 import android.view.Gravity;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.mylifeos.app.R;
 import com.mylifeos.app.shield.ShieldAccessibilityService;
 
 import java.util.ArrayList;
@@ -34,8 +33,11 @@ import java.util.Set;
  *   "package" : String  (the blocked app, re-checked on resume)
  *   "phase"   : String  ("SLEEP_LOCK" | "RISE_LOCK") — selects icon + accent tint
  *
- * Sleep and Rise use distinct, calm full-screen color environments while
- * keeping the exact same controls and safety information.
+ * [N2R-CARD] The visuals are the shared card from NightToRiseBlockCard (no
+ * painted backdrop — only the card is visible; the window itself is
+ * transparent). Every safety behaviour below — kill-switch taps, emergency
+ * unlock, strict-mode wait, allowed-app chips, re-check on resume, the
+ * swallowed back button — is unchanged from before this visual update.
  */
 public class NightToRiseBlockActivity extends Activity {
 
@@ -53,6 +55,8 @@ public class NightToRiseBlockActivity extends Activity {
     private CountDownTimer strictTimer;
     private String blockedPackage;
     private boolean broke = false;
+
+    private NightToRiseBlockCard.Handles ui;
 
     private static final Map<String, String> FRIENDLY_NAMES = new HashMap<>();
     static {
@@ -121,7 +125,8 @@ public class NightToRiseBlockActivity extends Activity {
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         );
-        setContentView(R.layout.activity_night_to_rise_block);
+        // [N2R-CARD] card-only: nothing painted behind it, window stays transparent.
+        getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         bind(getIntent());
     }
 
@@ -140,20 +145,22 @@ public class NightToRiseBlockActivity extends Activity {
         String phase = intent != null ? intent.getStringExtra(EXTRA_PHASE) : null;
         boolean isRise = "RISE_LOCK".equals(phase);
 
-        TextView messageView = findViewById(R.id.n2r_message);
-        messageView.setText(message != null ? message
-            : (isRise ? "Screens stay closed a little longer." : "Time to rest. Put the phone down."));
-        messageView.setOnClickListener(v -> registerKillSwitchTap());
+        // [N2R-CARD] (re)build the card fresh for this phase — cheap, and keeps the
+        // sleep/rise palette switch (and the icon/copy that go with it) simple and safe.
+        ui = NightToRiseBlockCard.build(this, isRise);
+        setContentView(ui.root);
 
-        applyPhaseVisuals(isRise);
+        ui.title.setText(isRise ? "Rise with intention" : "Rest now");
+        ui.message.setText(message != null ? message
+            : (isRise ? "Screens stay closed a little longer." : "Time to rest. Put the phone down."));
+        ui.message.setOnClickListener(v -> registerKillSwitchTap());
 
         final NightToRisePreferences prefs = new NightToRisePreferences(this);
         final NightToRiseManager manager = new NightToRiseManager(this);
         Set<String> available = NightToRiseDecider.effectiveAllowedPackages(manager.snapshot());
-        populateAllowedChips(available, isRise);
+        populateAllowedChips(available);
 
-        final Button override = findViewById(R.id.n2r_override);
-        override.setVisibility(android.view.View.VISIBLE);
+        final Button override = ui.override;
 
         if (strictTimer != null) { strictTimer.cancel(); strictTimer = null; }
 
@@ -178,7 +185,7 @@ public class NightToRiseBlockActivity extends Activity {
             }.start();
         }
 
-        TextView countdown = findViewById(R.id.n2r_countdown);
+        TextView countdown = ui.countdown;
         long remaining = Math.max(0, endMs - System.currentTimeMillis());
         if (timer != null) timer.cancel();
         timer = new CountDownTimer(remaining, 1000) {
@@ -195,49 +202,12 @@ public class NightToRiseBlockActivity extends Activity {
             }
         }.start();
 
-        findViewById(R.id.n2r_home).setOnClickListener(v -> goHome());
-    }
-
-    /** Phase-specific background gradient + icon + title. */
-    private void applyPhaseVisuals(boolean isRise) {
-        try {
-            android.view.View root = findViewById(R.id.n2r_root);
-            TextView title = findViewById(R.id.n2r_title);
-            TextView icon = findViewById(R.id.n2r_icon);
-            TextView pill = findViewById(R.id.n2r_phase_pill);
-
-            root.setBackgroundResource(isRise ? R.drawable.n2r_bg_rise : R.drawable.n2r_bg_sleep);
-            // The window itself is painted too, so rotating the screen or a
-            // slow first frame never flashes a different colour.
-            getWindow().setBackgroundDrawableResource(
-                isRise ? R.drawable.n2r_bg_rise : R.drawable.n2r_bg_sleep);
-            title.setText(isRise ? "Rise with intention" : "Rest now");
-            icon.setText(isRise ? "\uD83C\uDF05" : "\uD83C\uDF19"); // 🌅 sunrise vs 🌙 moon
-            if (pill != null) pill.setText(isRise ? "RISE GUARD" : "SLEEP GUARD");
-        } catch (Throwable ignored) {
-            // Never let cosmetic styling crash the block screen itself.
-        }
-    }
-
-    /** One short, calm entrance so the lock never feels like a crash. */
-    private void animateIn() {
-        try {
-            android.view.View content = findViewById(R.id.n2r_content);
-            if (content == null) return;
-            content.setAlpha(0f);
-            content.setTranslationY(dp(14));
-            content.animate()
-                .alpha(1f)
-                .translationY(0f)
-                .setDuration(260)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .start();
-        } catch (Throwable ignored) {}
+        ui.home.setOnClickListener(v -> goHome());
     }
 
     /** Builds frosted-glass pill chips (3 per row) for the allowed-apps list. */
-    private void populateAllowedChips(Set<String> packages, boolean isRise) {
-        LinearLayout container = findViewById(R.id.n2r_allowed_container);
+    private void populateAllowedChips(Set<String> packages) {
+        LinearLayout container = ui.allowedContainer;
         container.removeAllViews();
 
         // Package ids are noise on a lock screen — show de-duplicated, human
