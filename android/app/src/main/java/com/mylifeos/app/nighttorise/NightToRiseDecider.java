@@ -176,7 +176,8 @@ public final class NightToRiseDecider {
             int  alarmMin  = minuteOfDay(cfg, cfg.riseAlarmMs);
             long riseStart = mostRecentOccurrence(cfg, alarmMin, nowMs);
             long riseEnd   = riseStart + (long) cfg.riseAfterMin * 60_000L;
-            if (nowMs >= riseStart && nowMs < riseEnd) {
+            // FIX: only lock a morning the alarm actually rings on.
+            if (nowMs >= riseStart && nowMs < riseEnd && isAlarmDay(cfg, riseStart)) {
                 // Honour the schedule of the night that led into this morning.
                 long nightStart = mostRecentOccurrence(cfg, sleepStartMin, riseStart);
                 if (isDayActive(cfg, nightStart)) {
@@ -190,16 +191,21 @@ public final class NightToRiseDecider {
 
         // ---- Sleep Guard phase ----
         if (cfg.sleepGuardEnabled) {
-            long alarmMs = hasAlarm
-                ? nextOccurrenceAfter(cfg, minuteOfDay(cfg, cfg.riseAlarmMs), sleepStartMs)
-                : 0L;
+            // Hand off to the next occurrence that falls on a day the alarm
+            // really rings on — not simply tomorrow at alarm o'clock.
+            long alarmMs = hasAlarm ? nextAlarmOnValidDayAfter(cfg, sleepStartMs) : 0L;
+            long capMs   = sleepStartMs
+                + (long) (cfg.safetyCapMinutes > 0 ? cfg.safetyCapMinutes : DEFAULT_MAX_LOCK_MINUTES) * 60_000L;
+            boolean alarmUsable = alarmMs > sleepStartMs && alarmMs <= capMs;
             long sleepEnd;
             if ("duration".equals(cfg.sleepGuardEndMode)) {
                 int dur = Math.max(15, cfg.sleepGuardDurationMinutes);
                 sleepEnd = sleepStartMs + (long) dur * 60_000L;
-                if (hasAlarm && alarmMs < sleepEnd) sleepEnd = alarmMs;
+                if (alarmUsable && alarmMs < sleepEnd) sleepEnd = alarmMs;
             } else {
-                sleepEnd = hasAlarm ? alarmMs : sleepStartMs + (long) cfg.safetyCapMinutes * 60_000L;
+                // The cap is always counted from the LOCK START, exactly as the
+                // in-app countdown does, so screen and phone can never drift.
+                sleepEnd = alarmUsable ? alarmMs : capMs;
             }
             if (nowMs >= sleepStartMs && nowMs < sleepEnd) {
                 return new Decision(Phase.SLEEP_LOCK, true, sleepEnd, cfg.sleepMessage);
