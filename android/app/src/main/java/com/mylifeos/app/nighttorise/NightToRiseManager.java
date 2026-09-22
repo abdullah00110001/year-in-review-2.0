@@ -121,6 +121,7 @@ public class NightToRiseManager {
         cfg.sleepBeforeMin  = prefs.sleepBeforeMin();
         cfg.riseAfterMin    = prefs.riseAfterMin();
         cfg.riseAlarmMs     = prefs.riseAlarmMs();
+        cfg.riseAlarmDays   = prefs.riseAlarmDays();
         cfg.scheduleMode    = prefs.scheduleMode();
         cfg.scheduleDays    = prefs.scheduleDays();
         cfg.allowedPackages = prefs.allowedPackages();

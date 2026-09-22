@@ -47,7 +47,22 @@ public class NightToRisePlugin extends Plugin {
     @PluginMethod
     public void setRiseAlarm(PluginCall call) {
         long ms = call.getLong("epochMillis", 0L);
-        new NightToRisePreferences(getContext()).saveRiseAlarmMillis(ms);
+        NightToRisePreferences prefs = new NightToRisePreferences(getContext());
+        prefs.saveRiseAlarmMillis(ms);
+
+        // Weekdays the alarm rings on (0=Sun..6=Sat). Empty/absent = every day.
+        java.util.Set<Integer> days = new java.util.HashSet<>();
+        try {
+            com.getcapacitor.JSArray arr = call.getArray("days");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) {
+                    int d = arr.optInt(i, -1);
+                    if (d >= 0 && d <= 6) days.add(d);
+                }
+            }
+        } catch (Throwable ignored) {}
+        prefs.saveRiseAlarmDays(days);
+
         com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(getContext());
         call.resolve();
     }
