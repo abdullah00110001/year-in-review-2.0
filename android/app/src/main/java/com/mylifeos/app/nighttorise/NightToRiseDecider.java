@@ -34,8 +34,8 @@ public final class NightToRiseDecider {
 
     public enum Phase { OFF, ARMED, SLEEP_LOCK, RISE_LOCK, PAUSED, INACTIVE_DAY }
 
-    /** Fallback lock duration when no rise alarm is configured (9.5 hours). */
-    public static final int DEFAULT_MAX_LOCK_MINUTES = 570;
+    /** Fallback lock duration when no rise alarm is configured (spec: 10 hours). */
+    public static final int DEFAULT_MAX_LOCK_MINUTES = 600;
 
     /** A sleep window can never span longer than this (18 hours). */
     static final long MAX_WINDOW_MS = 18L * 60 * 60 * 1000;
@@ -70,6 +70,12 @@ public final class NightToRiseDecider {
         public int     sleepBeforeMin = 30;
         public int     riseAfterMin = 30;
         public long    riseAlarmMs;
+        /**
+         * Weekdays (0=Sun..6=Sat) the rise alarm rings on. EMPTY means daily.
+         * Without this the alarm's clock time was repeated every morning, so
+         * Rise Guard locked the phone on days with no alarm at all.
+         */
+        public Set<Integer> riseAlarmDays = new HashSet<>();
         public String  scheduleMode = "everyday";
         public Set<Integer> scheduleDays = new HashSet<>();
         /** The ONLY packages the user may foreground during a lock window. */
@@ -170,7 +176,8 @@ public final class NightToRiseDecider {
             int  alarmMin  = minuteOfDay(cfg, cfg.riseAlarmMs);
             long riseStart = mostRecentOccurrence(cfg, alarmMin, nowMs);
             long riseEnd   = riseStart + (long) cfg.riseAfterMin * 60_000L;
-            if (nowMs >= riseStart && nowMs < riseEnd) {
+            // FIX: only lock a morning the alarm actually rings on.
+            if (nowMs >= riseStart && nowMs < riseEnd && isAlarmDay(cfg, riseStart)) {
                 // Honour the schedule of the night that led into this morning.
                 long nightStart = mostRecentOccurrence(cfg, sleepStartMin, riseStart);
                 if (isDayActive(cfg, nightStart)) {
@@ -184,16 +191,21 @@ public final class NightToRiseDecider {
 
         // ---- Sleep Guard phase ----
         if (cfg.sleepGuardEnabled) {
-            long alarmMs = hasAlarm
-                ? nextOccurrenceAfter(cfg, minuteOfDay(cfg, cfg.riseAlarmMs), sleepStartMs)
-                : 0L;
+            // Hand off to the next occurrence that falls on a day the alarm
+            // really rings on — not simply tomorrow at alarm o'clock.
+            long alarmMs = hasAlarm ? nextAlarmOnValidDayAfter(cfg, sleepStartMs) : 0L;
+            long capMs   = sleepStartMs
+                + (long) (cfg.safetyCapMinutes > 0 ? cfg.safetyCapMinutes : DEFAULT_MAX_LOCK_MINUTES) * 60_000L;
+            boolean alarmUsable = alarmMs > sleepStartMs && alarmMs <= capMs;
             long sleepEnd;
             if ("duration".equals(cfg.sleepGuardEndMode)) {
                 int dur = Math.max(15, cfg.sleepGuardDurationMinutes);
                 sleepEnd = sleepStartMs + (long) dur * 60_000L;
-                if (hasAlarm && alarmMs < sleepEnd) sleepEnd = alarmMs;
+                if (alarmUsable && alarmMs < sleepEnd) sleepEnd = alarmMs;
             } else {
-                sleepEnd = hasAlarm ? alarmMs : sleepStartMs + (long) cfg.safetyCapMinutes * 60_000L;
+                // The cap is always counted from the LOCK START, exactly as the
+                // in-app countdown does, so screen and phone can never drift.
+                sleepEnd = alarmUsable ? alarmMs : capMs;
             }
             if (nowMs >= sleepStartMs && nowMs < sleepEnd) {
                 return new Decision(Phase.SLEEP_LOCK, true, sleepEnd, cfg.sleepMessage);

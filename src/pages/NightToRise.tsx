@@ -42,6 +42,7 @@ import { useNightToRiseStreak } from '@/components/rise/night-to-rise/useNightTo
 import { useNightToRiseLogs } from '@/hooks/useNightToRiseLogs';
 import { NightArc } from '@/components/rise/night-to-rise/NightArc';
 import { NightToRiseInsights } from '@/components/rise/night-to-rise/NightToRiseInsights';
+import { useNextRiseAlarm } from '@/components/rise/night-to-rise/nextRiseAlarm';
 import { InstalledAppPicker } from '@/components/rise/night-to-rise/InstalledAppPicker';
 import { NightToRisePermissions } from '@/components/rise/night-to-rise/NightToRisePermissions';
 import { NightToRiseSelfTest } from '@/components/rise/night-to-rise/NightToRiseSelfTest';
@@ -55,15 +56,6 @@ import { formatClock, parseHM } from '@/components/rise/night-to-rise/timeMath';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function readNextAlarm(): string | null {
-  try {
-    const raw = localStorage.getItem('local_alarms');
-    if (!raw) return null;
-    const list = JSON.parse(raw) as Array<{ enabled?: boolean; is_enabled?: boolean; time?: string; alarm_time?: string }>;
-    const hit = list.find((a) => (a.is_enabled ?? a.enabled) !== false && (a.alarm_time || a.time));
-    return hit ? (hit.alarm_time || hit.time) ?? null : null;
-  } catch { return null; }
-}
 
 function msToClock(ms: number) {
   const total = Math.max(0, Math.round(ms / 1000));
@@ -77,14 +69,17 @@ function msToClock(ms: number) {
 
 export default function NightToRisePage() {
   const navigate = useNavigate();
-  const riseAlarmTime = readNextAlarm();
+  // Single source of truth: nearest upcoming alarm, weekday-aware, merging
+  // this phone's alarms with the ones saved in the account.
+  const riseAlarm = useNextRiseAlarm();
+  const riseAlarmTime = riseAlarm?.time ?? null;
 
   const {
     config, update, status, windows, isLockEnforcing,
     pauseTonight, canPauseTonight, pausesThisWeek,
     strictLocked, strictLockRemainingMs, enableStrictMode, disableStrictMode,
     requestEmergencyUnlock, emergencyUnlockMsLeft,
-  } = useNightToRise(riseAlarmTime);
+  } = useNightToRise(riseAlarm);
 
 
   const { streak: localStreak } = useNightToRiseStreak();
@@ -358,6 +353,22 @@ export default function NightToRisePage() {
                           {Math.round(config.sleepGuardDurationMinutes / 60 * 10) / 10}h after it starts —
                           even if the Rise alarm hasn't gone off yet. Rise Guard still starts separately
                           when the alarm fires.
+                        </p>
+                      </>
+                    )}
+                    {config.sleepGuardEndMode === 'until-alarm' && (
+                      <>
+                        <SliderRow
+                          label="Safety limit with no alarm set"
+                          value={config.safetyCapHours ?? 10}
+                          min={4} max={12} step={1}
+                          disabled={strictLocked || !config.sleepGuardEnabled}
+                          onChange={(v) => update({ safetyCapHours: v })}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          If no alarm is set, Sleep Guard releases itself{' '}
+                          {config.safetyCapHours ?? 10}h after the lock starts, so a missing alarm can
+                          never keep your phone locked.
                         </p>
                       </>
                     )}

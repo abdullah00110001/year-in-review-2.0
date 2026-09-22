@@ -56,6 +56,11 @@ export interface NightToRiseConfig {
   sleepGuardEndMode: 'until-alarm' | 'duration';
   /** Minutes Sleep Guard runs when sleepGuardEndMode === 'duration'. */
   sleepGuardDurationMinutes: number;
+  /**
+   * Hard ceiling (hours) on how long Sleep Guard may run with no alarm
+   * attached. Spec default: 10 hours. Mirrored to native preferences.
+   */
+  safetyCapHours: number;
 }
 
 export type SleepGuardEndMode = NightToRiseConfig['sleepGuardEndMode'];
@@ -107,6 +112,7 @@ export const DEFAULT_CONFIG: NightToRiseConfig = {
   riseGuardEnabled: true,
   sleepGuardEndMode: 'until-alarm',
   sleepGuardDurationMinutes: 180,
+  safetyCapHours: 10,
 };
 
 /** SECTION 4 — strict mode commits the user for 24 hours. */

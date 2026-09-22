@@ -1,9 +1,11 @@
 import { Moon, ChevronRight, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useNightToRise } from './useNightToRise';
+import { useNextRiseAlarm } from './nextRiseAlarm';
 
 interface Props {
   onOpen: () => void;
+  /** @deprecated the nearest upcoming alarm is resolved internally now. */
   riseAlarmTime?: string | null;
 }
 
@@ -14,8 +16,9 @@ function fmt12(t: string) {
   return `${hh}:${String(m).padStart(2, '0')} ${period}`;
 }
 
-export function NightToRiseCard({ onOpen, riseAlarmTime }: Props) {
-  const { config, status } = useNightToRise(riseAlarmTime);
+export function NightToRiseCard({ onOpen }: Props) {
+  const riseAlarm = useNextRiseAlarm();
+  const { config, status } = useNightToRise(riseAlarm);
 
   const isLocked = status.phase === 'sleep-lock' || status.phase === 'rise-lock';
 
