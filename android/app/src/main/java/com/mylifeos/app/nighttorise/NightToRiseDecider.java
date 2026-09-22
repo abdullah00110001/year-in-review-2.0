@@ -23,9 +23,9 @@ import java.util.TimeZone;
  *     alarm) — no gap between Sleep Guard and Rise Guard.
  *   - "duration": Sleep Guard auto-releases a fixed number of minutes after
  *     it starts (cfg.sleepGuardDurationMinutes), regardless of the alarm.
- *     This intentionally creates a GAP — the phone is unlocked between Sleep
- *     Guard ending and Rise Guard starting at the alarm — matching what was
- *     explicitly requested: "Sleep Guard auto-off after 2-3 hours, Rise
+ *     This intentionally creates a GAP — the phone is unlocked between
+ *     Sleep Guard ending and Rise Guard starting at the alarm — matching what
+ *     was explicitly requested: "Sleep Guard auto-off after 2-3 hours, Rise
  *     Guard starts separately when the alarm fires."
  */
 public final class NightToRiseDecider {
@@ -253,7 +253,6 @@ public final class NightToRiseDecider {
         return ((sh * 60 + sm) - cfg.sleepBeforeMin + 1440 * 2) % 1440;
     }
 
-
     static boolean isDayActive(Config cfg, long atMs) {
         Calendar c = Calendar.getInstance(cfg.timeZone);
         c.setTimeInMillis(atMs);
@@ -262,6 +261,41 @@ public final class NightToRiseDecider {
         if ("everyday".equals(mode)) return true;
         if ("weekdays".equals(mode)) return dow >= 1 && dow <= 5;
         return cfg.scheduleDays.contains(dow);
+    }
+
+    /**
+     * Returns whether the alarm rings on the local calendar day represented by
+     * {@code alarmMs}. An empty set means the alarm rings daily.
+     */
+    static boolean isAlarmDay(Config cfg, long alarmMs) {
+        if (cfg == null || cfg.riseAlarmDays == null || cfg.riseAlarmDays.isEmpty()) {
+            return true;
+        }
+
+        Calendar c = Calendar.getInstance(cfg.timeZone);
+        c.setTimeInMillis(alarmMs);
+        int dow = c.get(Calendar.DAY_OF_WEEK) - 1; // 0=Sun..6=Sat
+        return cfg.riseAlarmDays.contains(dow);
+    }
+
+    /**
+     * Finds the first alarm occurrence strictly after {@code afterMs} that
+     * falls on a configured alarm day.
+     */
+    static long nextAlarmOnValidDayAfter(Config cfg, long afterMs) {
+        if (cfg == null || cfg.riseAlarmMs <= 0) return 0L;
+
+        int alarmMinute = minuteOfDay(cfg, cfg.riseAlarmMs);
+        long candidate = nextOccurrenceAfter(cfg, alarmMinute, afterMs);
+
+        // A weekly schedule must contain a valid day within seven occurrences.
+        // The larger bound also protects against unusual or malformed configs.
+        for (int i = 0; i < 370; i++) {
+            if (isAlarmDay(cfg, candidate)) return candidate;
+            candidate = nextOccurrenceAfter(cfg, alarmMinute, candidate);
+        }
+
+        return 0L;
     }
 
     /** Latest timestamp <= nowMs at which the clock read `minuteOfDay`. */
