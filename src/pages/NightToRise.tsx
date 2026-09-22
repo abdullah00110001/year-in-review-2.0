@@ -55,15 +55,6 @@ import { formatClock, parseHM } from '@/components/rise/night-to-rise/timeMath';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-function readNextAlarm(): string | null {
-  try {
-    const raw = localStorage.getItem('local_alarms');
-    if (!raw) return null;
-    const list = JSON.parse(raw) as Array<{ enabled?: boolean; is_enabled?: boolean; time?: string; alarm_time?: string }>;
-    const hit = list.find((a) => (a.is_enabled ?? a.enabled) !== false && (a.alarm_time || a.time));
-    return hit ? (hit.alarm_time || hit.time) ?? null : null;
-  } catch { return null; }
-}
 
 function msToClock(ms: number) {
   const total = Math.max(0, Math.round(ms / 1000));
