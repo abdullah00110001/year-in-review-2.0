@@ -42,6 +42,7 @@ public class NightToRisePreferences {
     private static final String K_STRICT_MODE      = "strictMode";
     private static final String K_PAUSED_UNTIL_MS  = "pausedUntilMs";
     private static final String K_RISE_ALARM_MS    = "riseAlarmMs";
+    private static final String K_RISE_ALARM_DAYS  = "riseAlarmDays";
     private static final String K_SLEEP_MSG        = "sleepBlockMessage";
     private static final String K_RISE_MSG         = "riseBlockMessage";
     private static final String K_PENDING_BREAK_TS = "pendingBreakTs"; // NEW
@@ -150,6 +151,36 @@ public class NightToRisePreferences {
     }
 
     public void saveRiseAlarmMillis(long ms) { sp.edit().putLong(K_RISE_ALARM_MS, ms).apply(); }
+
+    /**
+     * Weekdays (0=Sun..6=Sat) the rise alarm actually rings on, stored as CSV.
+     * Empty means "every day". Without this, Rise Guard used to repeat the
+     * alarm's clock time every morning, locking the phone on days with no alarm.
+     */
+    public void saveRiseAlarmDays(java.util.Set<Integer> days) {
+        StringBuilder sb = new StringBuilder();
+        if (days != null) {
+            for (Integer d : days) {
+                if (d == null || d < 0 || d > 6) continue;
+                if (sb.length() > 0) sb.append(",");
+                sb.append(d);
+            }
+        }
+        sp.edit().putString(K_RISE_ALARM_DAYS, sb.toString()).apply();
+    }
+
+    public java.util.Set<Integer> riseAlarmDays() {
+        java.util.Set<Integer> out = new java.util.HashSet<>();
+        String csv = sp.getString(K_RISE_ALARM_DAYS, "");
+        if (csv == null || csv.trim().isEmpty()) return out;
+        for (String part : csv.split(",")) {
+            try {
+                int d = Integer.parseInt(part.trim());
+                if (d >= 0 && d <= 6) out.add(d);
+            } catch (Throwable ignored) {}
+        }
+        return out;
+    }
 
     public boolean isEnabled()        { return sp.getBoolean(K_ENABLED, false) && sp.getBoolean(K_CONFIGURED, false); }
     public String  sleepTime()        { return sp.getString(K_SLEEP_TIME, "22:30"); }
