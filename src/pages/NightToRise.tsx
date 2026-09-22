@@ -42,6 +42,7 @@ import { useNightToRiseStreak } from '@/components/rise/night-to-rise/useNightTo
 import { useNightToRiseLogs } from '@/hooks/useNightToRiseLogs';
 import { NightArc } from '@/components/rise/night-to-rise/NightArc';
 import { NightToRiseInsights } from '@/components/rise/night-to-rise/NightToRiseInsights';
+import { useNextRiseAlarm } from '@/components/rise/night-to-rise/nextRiseAlarm';
 import { InstalledAppPicker } from '@/components/rise/night-to-rise/InstalledAppPicker';
 import { NightToRisePermissions } from '@/components/rise/night-to-rise/NightToRisePermissions';
 import { NightToRiseSelfTest } from '@/components/rise/night-to-rise/NightToRiseSelfTest';
@@ -68,14 +69,17 @@ function msToClock(ms: number) {
 
 export default function NightToRisePage() {
   const navigate = useNavigate();
-  const riseAlarmTime = readNextAlarm();
+  // Single source of truth: nearest upcoming alarm, weekday-aware, merging
+  // this phone's alarms with the ones saved in the account.
+  const riseAlarm = useNextRiseAlarm();
+  const riseAlarmTime = riseAlarm?.time ?? null;
 
   const {
     config, update, status, windows, isLockEnforcing,
     pauseTonight, canPauseTonight, pausesThisWeek,
     strictLocked, strictLockRemainingMs, enableStrictMode, disableStrictMode,
     requestEmergencyUnlock, emergencyUnlockMsLeft,
-  } = useNightToRise(riseAlarmTime);
+  } = useNightToRise(riseAlarm);
 
 
   const { streak: localStreak } = useNightToRiseStreak();
