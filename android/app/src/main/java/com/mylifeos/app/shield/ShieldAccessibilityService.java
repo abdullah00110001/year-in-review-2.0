@@ -219,7 +219,53 @@ public class ShieldAccessibilityService extends AccessibilityService {
         "brazzers", "bangbros", "livejasmin", "camgirl", "webcamgirl",
         "freecam", "dirtygirl", "slutload", "slutroulette", "faphouse",
         "cumlouder", "beeg", "xnxx", "fuq", "tnaflix", "4tube",
-        "youjizz", "mofos", "teamskeet", "realitykings", "naughtyamerica"
+        "youjizz", "mofos", "teamskeet", "realitykings", "naughtyamerica",
+        // Moved here from adult_keywords.txt: these are site/brand names, not
+        // generic content words, so they belong in domain/URL matching only —
+        // free chat/typed text should never trigger on a brand-name collision.
+        "21sextury", "3movs", "69games", "adameve",
+        "adultfriendfinder", "adulttime", "alohatube", "americansexdolls",
+        "analgalore", "anyshemale", "ashemaletube", "assoass",
+        "avn", "babepedia", "badjojo", "badoinkvr",
+        "bangstars", "bdsmstreak", "bellesa", "bemyhole",
+        "besttrannypornsites", "bigassporn", "bigporn", "boyfriendtv",
+        "camsfinder", "camsoda", "camsodaai", "camster",
+        "candyai", "chaturbate.lat", "clips4sale", "colliderporn",
+        "czechvr", "digitalplayground", "dondiai", "dorcelclub",
+        "elegantangel", "eporner", "eroticbeauties", "fakku",
+        "findafuckbuddy", "flingster", "flirtcamai", "forhertube",
+        "forum.adultdvdtalk", "freelocalsex", "freeones", "frolicme",
+        "fyptt", "gamcore", "gamesofdesire", "gay0day",
+        "gaymaletube", "gayxo", "gelbooru", "girlsway",
+        "gptgirlfriend", "grannytube", "handjobhub", "hentaigasm",
+        "highreply", "homemadegalore", "homepornking", "hotmilfsfuck",
+        "hotporntubes", "hqporn", "ichatonline", "imlive",
+        "iporntv", "ixxx", "jav.guru", "javhd",
+        "jerkmate", "jerkroulette", "joylovedolls", "lesbify",
+        "lesbosland", "lobstertube", "lovehomeporn", "machotube",
+        "madeporn", "maturetube", "megatube", "melonstube",
+        "milfmovs", "milfporn", "mopoga", "myfreecams",
+        "mypornbible", "myporngay", "myspicyvanilla", "newsensations",
+        "nutaku", "penispictures", "perfectgirls", "pichunter",
+        "playboy", "porcore", "porn.biz", "porn300",
+        "porn7", "porndoe", "porngames", "porngameshub",
+        "pornhat", "pornhub", "pornid", "pornmd",
+        "pornone", "pornpic", "pornplanner", "pornprosnetwork",
+        "pornworks", "pussyspace", "qorno", "rabbitscams",
+        "rat.xxx", "rawrides", "realsexdoll", "rosetoy",
+        "royalcamslive", "rule34", "secretsai", "sexlikereal",
+        "sexmessenger", "sexvid", "sexyai", "sexymeet",
+        "sexyrealsexdolls", "skyprivate", "smutr", "spicychat",
+        "spizoo", "stasyq", "stripchatvr", "sugarlab",
+        "superporn", "sweepsex", "sxyprn", "teenmegaworld",
+        "theyarehuge", "tiava", "tikporn", "tubebdsm",
+        "tubegalore", "tubepornstars", "tubev", "twistys",
+        "videosz", "viewgals", "vipwank", "vjav",
+        "voyeur-house", "vrbangers", "vrporn", "vrsmash",
+        "wankzvr", "xanimu", "xbabe", "xcafe",
+        "xgroovy", "xtease", "xvideos", "xxxbunker",
+        "xxxfollow", "xxxtik", "youporngay", "yourdoll",
+        "youx", "zbporn", "zenra", "zzztube",
     };
 
     // Fallback-only hardcoded browser list (union with dynamically resolved packages).
@@ -237,12 +283,26 @@ public class ShieldAccessibilityService extends AccessibilityService {
         "com.zhiliaoapp.musically", "com.ss.android.ugc.trill",
         "org.telegram.messenger", "com.twitter.android",
         "com.reddit.frontpage",
+        // Telegram forks — same rendered UI as official Telegram, so typed-keyword
+        // blocking (Feature 5) and screen-content scanning must cover them too.
+        // Keep in sync with TelegramGuard.TELEGRAM_PACKAGES.
+        "org.telegram.messenger.web", "org.telegram.messenger.beta",
+        "org.telegram.plus", "org.thunderdog.challegram",
+        "nekox.messenger", "tw.nekomimi.nekogram",
+        "com.iMe.android", "org.telegram.BifToGram",
+        "ir.ilmili.telegraph", "org.mmessenger.messenger",
     };
 
     // Known in-app-webview hosts: apps that embed a WebView and can render arbitrary URLs.
     private static final String[] IN_APP_WEBVIEW_PACKAGES = new String[]{
         "com.facebook.katana", "com.instagram.android", "org.telegram.messenger",
         "com.twitter.android", "com.reddit.frontpage", "com.zhiliaoapp.musically",
+        // Telegram forks — kept in sync with CONTENT_SCAN_PACKAGES above.
+        "org.telegram.messenger.web", "org.telegram.messenger.beta",
+        "org.telegram.plus", "org.thunderdog.challegram",
+        "nekox.messenger", "tw.nekomimi.nekogram",
+        "com.iMe.android", "org.telegram.BifToGram",
+        "ir.ilmili.telegraph", "org.mmessenger.messenger",
     };
 
     // ==========================================
@@ -1051,3 +1111,4 @@ public class ShieldAccessibilityService extends AccessibilityService {
         Log.e(TAG, "Shield Accessibility Service Interrupted");
     }
 }
+

@@ -157,6 +157,27 @@ public final class TelegramGuard {
             }
         }
 
+        // 3a. Join sheet is open — scan the sheet's own name/description text directly.
+        // This does NOT depend on a prior flagged screen: the group/channel name and
+        // description rendered on the join-confirmation sheet are matched against the
+        // same keyword set right here, so an adult group can be blocked the very first
+        // time its join sheet is seen, before ever entering the chat.
+        if (cfg.blockInviteLinks && joinSheet) {
+            for (String raw : texts) {
+                String lower = raw.toLowerCase(Locale.ROOT);
+                boolean isMarkerLine = false;
+                for (String marker : JOIN_MARKERS) {
+                    if (lower.equals(marker) || lower.contains(marker)) { isMarkerLine = true; break; }
+                }
+                // Skip the marker line itself (e.g. "Join Group") — we want the
+                // group's own name/description text, not the button/prompt text.
+                if (isMarkerLine) continue;
+                if (ContentMatcher.matchesKeyword(raw, keywords)) {
+                    return Verdict.yes("Telegram join blocked: \"" + trim(raw) + "\"");
+                }
+            }
+        }
+
         // 3b. Strict mode — no joining anything at all through a link.
         if (cfg.blockInviteLinks && cfg.blockAllInvites && joinSheet) {
             return Verdict.yes("Joining Telegram groups is blocked");
@@ -197,3 +218,4 @@ public final class TelegramGuard {
         } catch (Throwable ignored) {}
     }
 }
+
