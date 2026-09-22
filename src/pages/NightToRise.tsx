@@ -356,6 +356,22 @@ export default function NightToRisePage() {
                         </p>
                       </>
                     )}
+                    {config.sleepGuardEndMode === 'until-alarm' && (
+                      <>
+                        <SliderRow
+                          label="Safety limit with no alarm set"
+                          value={config.safetyCapHours ?? 10}
+                          min={4} max={12} step={1}
+                          disabled={strictLocked || !config.sleepGuardEnabled}
+                          onChange={(v) => update({ safetyCapHours: v })}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          If no alarm is set, Sleep Guard releases itself{' '}
+                          {config.safetyCapHours ?? 10}h after the lock starts, so a missing alarm can
+                          never keep your phone locked.
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
               </Section>
