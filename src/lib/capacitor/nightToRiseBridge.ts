@@ -12,7 +12,7 @@ import type { NightToRiseConfig } from '@/components/rise/night-to-rise/types';
 
 interface NightToRiseNativePlugin {
   setConfig(options: { json: string }): Promise<void>;
-  setRiseAlarm(options: { epochMillis: number }): Promise<void>;
+  setRiseAlarm(options: { epochMillis: number; days?: number[] }): Promise<void>;
   consumePendingBreak(): Promise<{ broke: boolean }>;
   getStatus(): Promise<NativeLockStatus>;
   getDiagnostics(): Promise<NativeDiagnostics>;
@@ -64,9 +64,13 @@ export const nightToRiseBridge = {
       console.warn('[NightToRise bridge] setConfig failed', e);
     }
   },
-  async setRiseAlarm(epochMillis: number): Promise<void> {
+  /**
+   * @param days weekdays (0=Sun..6=Sat) the alarm actually rings on. Empty
+   * means daily. Rise Guard must never lock a morning with no alarm.
+   */
+  async setRiseAlarm(epochMillis: number, days: number[] = []): Promise<void> {
     if (!isAndroid) return;
-    try { await Plugin.setRiseAlarm({ epochMillis }); } catch (e) {
+    try { await Plugin.setRiseAlarm({ epochMillis, days }); } catch (e) {
       console.warn('[NightToRise bridge] setRiseAlarm failed', e);
     }
   },
