@@ -44,13 +44,6 @@ export function NightToRiseGuard() {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === 'local_alarms') setAlarmTime(readNextAlarmTime());
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
 
   // Pick up breaks that happened on the NATIVE block screen.
   useEffect(() => {
