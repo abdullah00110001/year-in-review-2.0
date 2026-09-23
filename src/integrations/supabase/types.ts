@@ -135,6 +135,39 @@ export type Database = {
         }
         Relationships: []
       }
+      activity_log: {
+        Row: {
+          context_label: string | null
+          created_at: string
+          id: string
+          matched_text: string | null
+          reason: string
+          severity: string
+          source: string
+          user_id: string
+        }
+        Insert: {
+          context_label?: string | null
+          created_at?: string
+          id?: string
+          matched_text?: string | null
+          reason: string
+          severity: string
+          source: string
+          user_id: string
+        }
+        Update: {
+          context_label?: string | null
+          created_at?: string
+          id?: string
+          matched_text?: string | null
+          reason?: string
+          severity?: string
+          source?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       activity_tags: {
         Row: {
           color: string
