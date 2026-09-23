@@ -291,6 +291,15 @@ public final class BlockingOverlay {
             wm.addView(outer, lp);
             activeView = outer;
             activeWindowManager = wm;
+
+            // [N2R-REBOOT-FIX] Same safety valve Shield's card already has: this
+            // surface can never stay on screen forever, no matter what triggered it.
+            final View shown = outer;
+            cardHandler.postDelayed(() -> {
+                synchronized (BlockingOverlay.class) {
+                    if (activeView == shown) hide();
+                }
+            }, CARD_FAILSAFE_MS);
             return true;
         } catch (Throwable ignored) {
             hide();

@@ -47,6 +47,19 @@ public class NightToRiseBlockActivity extends Activity {
     public static final String EXTRA_PACKAGE = "package";
     public static final String EXTRA_PHASE   = "phase";
 
+    // [N2R-REBOOT-FIX] Same loop-breaker ShieldBlockActivity already has. Without
+    // this, a re-bind triggered from onResume() (e.g. because a stray overlay
+    // briefly stole and returned focus) had no ceiling — bind() rebuilds the
+    // whole card (fresh gradients, fresh animator) every single call.
+    private static final int MAX_REBINDS_IN_WINDOW = 5;
+    private static final long REBIND_WINDOW_MS = 10_000;
+    private final java.util.ArrayDeque<Long> recentBinds = new java.util.ArrayDeque<>();
+
+    /** Guards against a second instance of this activity stacking on top of itself. */
+    private static volatile boolean sInstanceActive = false;
+    /** True only for the instance that set sInstanceActive; a rejected duplicate must not clear it. */
+    private boolean ownsInstance = false;
+
     private static final int KILL_TAP_COUNT = 7;
     private static final long KILL_TAP_WINDOW_MS = 5000;
     private final List<Long> killTaps = new ArrayList<>();
@@ -119,6 +132,13 @@ public class NightToRiseBlockActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // [N2R-REBOOT-FIX] Don't stack a second instance on top of an existing one.
+        if (sInstanceActive) {
+            finish();
+            return;
+        }
+        sInstanceActive = true;
+        ownsInstance = true;
         ShieldAccessibilityService.dismissBlockingOverlay();
         getWindow().addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
@@ -138,6 +158,22 @@ public class NightToRiseBlockActivity extends Activity {
     }
 
     private void bind(Intent intent) {
+        // [N2R-REBOOT-FIX] Loop breaker: bind() rebuilds the entire card (fresh
+        // gradients + animator) every call. If something keeps re-triggering it
+        // faster than a person could possibly be reacting, stop rebuilding and
+        // just leave — BlockEnforcer's own dedupe/cooldown will re-present
+        // cleanly afterwards if the lock is still active.
+        long rebindAt = System.currentTimeMillis();
+        recentBinds.addLast(rebindAt);
+        while (!recentBinds.isEmpty() && rebindAt - recentBinds.peekFirst() > REBIND_WINDOW_MS) {
+            recentBinds.pollFirst();
+        }
+        if (recentBinds.size() > MAX_REBINDS_IN_WINDOW) {
+            broke = true;
+            goHome();
+            return;
+        }
+
         String message = intent != null ? intent.getStringExtra(EXTRA_MESSAGE) : null;
         long   endMs   = intent != null ? intent.getLongExtra(EXTRA_END_MS, 0L) : 0L;
         boolean strict = intent != null && intent.getBooleanExtra(EXTRA_STRICT, false);
@@ -301,6 +337,10 @@ public class NightToRiseBlockActivity extends Activity {
     protected void onDestroy() {
         if (timer != null) timer.cancel();
         if (strictTimer != null) strictTimer.cancel();
+        if (ownsInstance) {
+            sInstanceActive = false;
+            ownsInstance = false;
+        }
         super.onDestroy();
     }
 }

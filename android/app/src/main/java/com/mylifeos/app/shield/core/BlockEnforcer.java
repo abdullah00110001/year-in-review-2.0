@@ -357,13 +357,20 @@ public final class BlockEnforcer {
         // Prefer the bound accessibility service itself. Starting from the
         // polling foreground service is restricted on Android 10+, even when
         // accessibility happens to be connected in the same process.
+        // [N2R-REBOOT-FIX] Same rule as Shield's presentShield(): a successful
+        // presentation stops here. The old code ALSO scheduled a "just in
+        // case" BlockingOverlay 450ms after a successful Activity launch,
+        // unconditionally — even when the Activity was already on screen.
+        // That put two full-screen surfaces on top of each other on every
+        // single block, which is what was actually causing the repeated
+        // flashing and, almost certainly, the reboot: WindowManager churn
+        // this rapid is the same failure class already documented and fixed
+        // once before in ForegroundGuardService (see its SAFETY-CRITICAL
+        // comment). dismissBlockingOverlay() cannot cancel this scheduled
+        // call — it can only hide a view that already exists — so the
+        // Activity had no way to prevent it.
         if (com.mylifeos.app.shield.ShieldAccessibilityService.launchBlockActivity(i)) {
             lastError = null;
-            // startActivity() can return normally while Android silently denies the
-            // background launch. Present an accessibility overlay shortly after as
-            // the guaranteed fallback; a successfully-created activity dismisses it.
-            com.mylifeos.app.shield.ShieldAccessibilityService.scheduleBlockingOverlay(
-                sleepToRise, rise, title, body, leaveApp);
             return true;
         }
 
