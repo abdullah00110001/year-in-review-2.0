@@ -817,7 +817,6 @@ public class ShieldAccessibilityService extends AccessibilityService {
             Log.d(TAG, "🔞 HARD BLOCK | " + reason + " | pkg: " + packageName);
             loopGuard.registerTrigger(packageName);
             preferences.incrementBlockedAttempts();
-            performGlobalAction(GLOBAL_ACTION_BACK);
 
             if (packageName != null && !packageName.isEmpty()) {
                 escalationManager.registerOffense(packageName);
@@ -825,9 +824,13 @@ public class ShieldAccessibilityService extends AccessibilityService {
                 firewall.blockApp(packageName, blockDurationMs);
             }
 
+            // Cover the screen FIRST, then leave the app underneath — this way the
+            // flagged content (or a flash of whatever is behind it) is never visible,
+            // even for a moment. Previously BACK fired immediately but the block
+            // screen only appeared ~150ms later, leaving a visible gap.
             pendingBlockKind = classifyBlockKind(reason);
-            new Handler(Looper.getMainLooper()).postDelayed(
-                () -> showBlockScreen(packageName, true), 150);
+            showBlockScreen(packageName, true);
+            performGlobalAction(GLOBAL_ACTION_BACK);
             return;
         }
 
@@ -836,8 +839,22 @@ public class ShieldAccessibilityService extends AccessibilityService {
             loopGuard.registerTrigger(packageName);
             preferences.incrementBlockedAttempts();
             performGlobalAction(GLOBAL_ACTION_BACK);
+
+            String toastMessage = "Blocked content avoided";
+            if (packageName != null && !packageName.isEmpty()) {
+                try {
+                    long remainingMs = escalationManager.getRemainingMs(packageName);
+                    long remainingMin = Math.max(1, remainingMs / 60_000);
+                    if (remainingMs > 0) {
+                        toastMessage = "App blocked for " + remainingMin + " min";
+                    }
+                } catch (Throwable ignored) {
+                    // Fall back to the generic message if escalation state isn't available yet.
+                }
+            }
+            final String finalToastMessage = toastMessage;
             new Handler(Looper.getMainLooper()).postDelayed(() ->
-                Toast.makeText(getApplicationContext(), "Blocked content avoided", Toast.LENGTH_SHORT).show(), 150);
+                Toast.makeText(getApplicationContext(), finalToastMessage, Toast.LENGTH_SHORT).show(), 150);
             return;
         }
 

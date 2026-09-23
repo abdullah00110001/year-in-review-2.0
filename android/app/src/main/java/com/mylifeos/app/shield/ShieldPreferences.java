@@ -507,6 +507,16 @@ public boolean getTelegramGuardOption(String key) {
 
 public void setTelegramGuardOption(String key, boolean value) {
     prefs.edit().putBoolean("tg_guard_" + key, value).apply();
+    // Without this, a running ShieldAccessibilityService keeps using its cached
+    // TelegramGuard.Config (loaded at some earlier, unrelated point) until some
+    // other event happens to reload it — so turning the guard off here would not
+    // actually take effect until the service was restarted. This makes the
+    // toggle take effect immediately.
+    try {
+        com.mylifeos.app.shield.ShieldAccessibilityService.refreshContentConfiguration();
+    } catch (Throwable ignored) {
+        // Service may not be running yet (e.g. accessibility permission not granted) — fine.
+    }
 }
 
 public com.mylifeos.app.shield.core.TelegramGuard.Config getTelegramGuardConfig() {
@@ -522,4 +532,3 @@ public com.mylifeos.app.shield.core.TelegramGuard.Config getTelegramGuardConfig(
     return cfg;
 }
 }
-
