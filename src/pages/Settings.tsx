@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -21,6 +22,7 @@ import PermissionsCard from '@/components/settings/PermissionsCard';
 
 export default function Settings() {
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
   const { t, language, setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
   const [loading, setLoading] = useState(true);
