@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { supabase } from '@/integrations/supabase/client';
-import { Loader2, User, Mail, Save, Palette, Globe, Key, RefreshCw, Crown, Sparkles } from 'lucide-react';
+import { Loader2, User, Mail, Save, Palette, Globe, Key, RefreshCw, Crown, Sparkles, ScrollText } from 'lucide-react';
 import { toast } from 'sonner';
 import ModeSwitcher from '@/components/mode/ModeSwitcher';
 import NotificationSettings from '@/components/notifications/NotificationSettings';
@@ -274,6 +274,24 @@ export default function Settings() {
                         {language === 'bn' ? 'রিসেট লিঙ্ক পাঠান' : 'Send Reset Link'}
                       </Button>
                     </div>
+                  </CardContent>
+                </Card>
+
+                {/* Activity Log Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-subtitle flex items-center gap-2">
+                      <ScrollText className="h-5 w-5" />
+                      {language === 'bn' ? 'অ্যাক্টিভিটি লগ' : 'Activity log'}
+                    </CardTitle>
+                    <CardDescription className="text-caption">
+                      {language === 'bn' ? 'আপনার সাম্প্রতিক ইভেন্টগুলো দেখুন' : 'Review your recent events by source'}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Button variant="outline" onClick={() => navigate('/activity-log')}>
+                      {language === 'bn' ? 'অ্যাক্টিভিটি লগ দেখুন' : 'Open activity log'}
+                    </Button>
                   </CardContent>
                 </Card>
 
