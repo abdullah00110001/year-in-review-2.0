@@ -161,8 +161,8 @@ export function AdultFilterPage({ onBack, isActive }: AdultFilterPageProps) {
             ShieldPlugin.getBlockedSites().catch(() => null),
             ShieldPlugin.getAdultFilterScreen().catch(() => null),
           ]);
-          if (kw?.keywords) setKeywords(kw.keywords);
-          if (st?.sites) setSites(st.sites);
+          if (kw?.keywords?.length) setKeywords(kw.keywords);
+          if (st?.sites?.length) setSites(st.sites);
           if (scr?.style) setSelectedScreen(scr.style);
           if (scr?.style === 'custom' && scr.customMessage) setCustomMessage(scr.customMessage);
         } catch { /* keep local values */ }
