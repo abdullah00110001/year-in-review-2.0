@@ -47,7 +47,27 @@ public class ForegroundGuardService extends Service {
     private static final String TAG = "ForegroundGuard";
     private static final String CHANNEL_ID = "shield_guard_status";
     private static final int NOTIF_ID = 4711;
-    private static final long POLL_MS = 1000L;
+    /**
+     * SAFETY-CRITICAL (device reboot): every poll tick hits system_server
+     * (UsageStatsService + AppOps). At a fixed 1s all night, plus a second
+     * 2-minute-range queryEvents, that sustained binder load was the last
+     * remaining watchdog trigger. Poll is now adaptive: fast only while the
+     * screen is on AND a lock is active, slow otherwise, and paused while
+     * the screen is off (nothing can be opened then).
+     */
+    private static final long POLL_FAST_MS = 1500L;
+    private static final long POLL_IDLE_MS = 10_000L;
+    private static final long POLL_SCREEN_OFF_MS = 60_000L;
+    private static final long PERM_CACHE_MS = 30_000L;
+    private volatile boolean screenOn = true;
+    private long nextDelay = POLL_FAST_MS;
+    private android.content.BroadcastReceiver screenReceiver;
+    private Boolean cachedUsageAccess = null;
+    private long usageAccessAt = 0L;
+    private Boolean cachedA11yPerm = null;
+    private long a11yPermAt = 0L;
+    private long lastQueryEnd = 0L;
+    private String lastKnownPkg = null;
 
     private static final String PROBE_PACKAGE = "zz.lifeos.lock.probe";
 
@@ -121,10 +141,31 @@ public class ForegroundGuardService extends Service {
         running = true;
         createChannel();
         startForeground(NOTIF_ID, buildNotification("Protection active", "Checking your lock schedule…"));
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) screenOn = pm.isInteractive();
+        } catch (Throwable ignored) {}
+        screenReceiver = new android.content.BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent in) {
+                screenOn = !Intent.ACTION_SCREEN_OFF.equals(in.getAction());
+                if (screenOn && tick != null) {
+                    handler.removeCallbacks(tick);
+                    handler.post(tick);
+                }
+            }
+        };
+        try {
+            android.content.IntentFilter f = new android.content.IntentFilter();
+            f.addAction(Intent.ACTION_SCREEN_ON);
+            f.addAction(Intent.ACTION_SCREEN_OFF);
+            f.addAction(Intent.ACTION_USER_PRESENT);
+            registerReceiver(screenReceiver, f);
+        } catch (Throwable t) { screenReceiver = null; }
         tick = new Runnable() {
             @Override public void run() {
+                nextDelay = POLL_IDLE_MS;
                 try { pass(); } catch (Throwable t) { Log.w(TAG, "guard pass failed", t); }
-                handler.postDelayed(this, POLL_MS);
+                handler.postDelayed(this, screenOn ? nextDelay : POLL_SCREEN_OFF_MS);
             }
         };
         handler.post(tick);
@@ -140,6 +181,10 @@ public class ForegroundGuardService extends Service {
         running = false;
         lastSyncNeeded = null;
         if (tick != null) handler.removeCallbacks(tick);
+        if (screenReceiver != null) {
+            try { unregisterReceiver(screenReceiver); } catch (Throwable ignored) {}
+            screenReceiver = null;
+        }
         super.onDestroy();
     }
 
@@ -149,11 +194,13 @@ public class ForegroundGuardService extends Service {
     private void pass() {
         NightToRiseManager n2r = new NightToRiseManager(this);
         NightToRiseManager.Decision probe = n2r.decide(System.currentTimeMillis(), PROBE_PACKAGE);
-        String pkg = currentForegroundPackage();
+        if (probe.shouldBlock) nextDelay = POLL_FAST_MS;
+        // Screen off: no app can be opened, so skip all system_server queries.
+        String pkg = screenOn ? currentForegroundPackage() : lastKnownPkg;
 
         boolean accessibilityAvailable =
             com.mylifeos.app.shield.ShieldAccessibilityService.isConnected()
-            || new com.mylifeos.app.shield.ShieldPermissionHelper(this).hasAccessibilityPermission();
+            || hasA11yPermCached();
 
         BlockEnforcer.noteGuardPass(probe.phase.name(), probe.shouldBlock, pkg,
             hasUsageAccess(), accessibilityAvailable);
@@ -169,6 +216,7 @@ public class ForegroundGuardService extends Service {
             shieldHasBlocked = blockedApps != null && !blockedApps.isEmpty();
         } catch (Throwable ignored) {}
 
+        if (shieldHasBlocked) nextDelay = POLL_FAST_MS;
         if (!probe.shouldBlock && !shieldHasBlocked && !n2r.prefs().isEnabled()) {
             stopSelf();
             return;
@@ -205,35 +253,40 @@ public class ForegroundGuardService extends Service {
         }
     }
 
-    private String cachedLongWindowPkg = null;
-    private long cachedLongWindowAt = 0L;
+    private boolean hasA11yPermCached() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (cachedA11yPerm == null || now - a11yPermAt > PERM_CACHE_MS) {
+            try { cachedA11yPerm = new com.mylifeos.app.shield.ShieldPermissionHelper(this).hasAccessibilityPermission(); }
+            catch (Throwable t) { cachedA11yPerm = false; }
+            a11yPermAt = now;
+        }
+        return cachedA11yPerm;
+    }
 
+    /**
+     * Incremental: only asks UsageStats for events since the previous query,
+     * so each call covers ~1-10s instead of repeatedly re-reading 10s + 2min
+     * windows. One small binder call per tick, at most.
+     */
     private String currentForegroundPackage() {
         if (hasUsageAccess()) {
-            String recent = lastResumedSince(10_000L);
-            if (recent != null) return recent;
             long now = System.currentTimeMillis();
-            // FIX: the fallback window used to be SIX HOURS, so a missed poll
-            // could resurrect an app the user closed hours ago (blocking the
-            // wrong thing) or mask the real foreground app. Two minutes is
-            // long enough to survive OEM Doze throttling of the 1s poll while
-            // still being a genuinely "current" signal.
-            if (cachedLongWindowPkg == null || now - cachedLongWindowAt > 5_000L) {
-                cachedLongWindowPkg = lastResumedSince(2L * 60 * 1000);
-                cachedLongWindowAt = now;
-            }
-            if (cachedLongWindowPkg != null) return cachedLongWindowPkg;
+            long from = (lastQueryEnd <= 0 || now - lastQueryEnd > 2L * 60 * 1000)
+                ? now - 2L * 60 * 1000 : lastQueryEnd - 500L;
+            String recent = lastResumedBetween(from, now);
+            lastQueryEnd = now;
+            if (recent != null) lastKnownPkg = recent;
+            if (lastKnownPkg != null) return lastKnownPkg;
         }
         if (BlockEnforcer.lastForegroundAgeMs() < 60_000) return BlockEnforcer.lastForegroundPackage();
         return null;
     }
 
-    private String lastResumedSince(long lookbackMs) {
+    private String lastResumedBetween(long from, long to) {
         try {
             UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
             if (usm == null) return null;
-            long now = System.currentTimeMillis();
-            UsageEvents events = usm.queryEvents(now - lookbackMs, now);
+            UsageEvents events = usm.queryEvents(from, to);
             UsageEvents.Event e = new UsageEvents.Event();
             String last = null;
             while (events != null && events.hasNextEvent()) {
@@ -252,6 +305,14 @@ public class ForegroundGuardService extends Service {
     }
 
     private boolean hasUsageAccess() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (cachedUsageAccess != null && now - usageAccessAt < PERM_CACHE_MS) return cachedUsageAccess;
+        usageAccessAt = now;
+        cachedUsageAccess = hasUsageAccessUncached();
+        return cachedUsageAccess;
+    }
+
+    private boolean hasUsageAccessUncached() {
         try {
             AppOpsManager ops = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
             if (ops == null) return false;
