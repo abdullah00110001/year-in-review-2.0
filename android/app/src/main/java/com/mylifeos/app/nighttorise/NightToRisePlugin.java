@@ -33,6 +33,7 @@ public class NightToRisePlugin extends Plugin {
 
     @PluginMethod
     public void setConfig(PluginCall call) {
+        com.mylifeos.app.LifeLog.i("SleepToRise", "setConfig from app: " + call.getData().toString());
         String json = call.getString("json");
         if (json == null) { call.reject("json required"); return; }
         try {
@@ -46,6 +47,7 @@ public class NightToRisePlugin extends Plugin {
 
     @PluginMethod
     public void setRiseAlarm(PluginCall call) {
+        com.mylifeos.app.LifeLog.i("SleepToRise", "setRiseAlarm: " + call.getData().toString());
         long ms = call.getLong("epochMillis", 0L);
         NightToRisePreferences prefs = new NightToRisePreferences(getContext());
         prefs.saveRiseAlarmMillis(ms);
@@ -102,6 +104,7 @@ public class NightToRisePlugin extends Plugin {
         ret.put("locking", d.shouldBlock);
         ret.put("endTimeMs", d.endTimeMs);
         ret.put("accessibilityEnabled", isAccessibilityServiceEnabled(ctx));
+        ret.put("safeModeNotice", com.mylifeos.app.shield.core.GlobalActionGovernor.consumeSafeModeNotice(ctx));
         call.resolve(ret);
     }
 

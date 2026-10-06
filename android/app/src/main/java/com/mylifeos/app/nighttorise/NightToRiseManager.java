@@ -41,6 +41,19 @@ public class NightToRiseManager {
 
     public NightToRisePreferences prefs() { return prefs; }
 
+    /** One shared instance: no new manager / prefs object per accessibility event. */
+    private static volatile NightToRiseManager shared;
+    public static NightToRiseManager get(Context ctx) {
+        NightToRiseManager m = shared;
+        if (m == null) {
+            synchronized (NightToRiseManager.class) {
+                if (shared == null) shared = new NightToRiseManager(ctx);
+                m = shared;
+            }
+        }
+        return m;
+    }
+
     /**
      * Runtime safety exemptions that can only be resolved on-device: the user's
      * default SMS app, the default dialer, and every launcher that could ever
@@ -57,16 +70,42 @@ public class NightToRiseManager {
      * The result only changes when the user swaps their launcher / default SMS
      * / default dialer, so it is cached process-wide for 10 minutes.
      */
-    private static final long SAFETY_CACHE_TTL_MS = 10L * 60 * 1000;
+    private static final long SAFETY_CACHE_TTL_MS = 30L * 60 * 1000;
     private static volatile java.util.Set<String> safetyCache = null;
     private static volatile long safetyCacheAt = 0L;
+    private static final java.util.concurrent.atomic.AtomicBoolean safetyResolving =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
 
+    /**
+     * SAFETY-CRITICAL (OPPO/ColorOS reboot): this NEVER does PackageManager work
+     * on the calling thread anymore. decide() runs on the accessibility/guard
+     * thread many times per second; resolving launchers/SMS/dialer/IMEs inline
+     * issued heavy binder transactions into system_server until its watchdog
+     * restarted the phone. Now the caller always gets the last known set
+     * immediately, and a single background thread refreshes it at most once.
+     */
     private java.util.Set<String> safetyPackages() {
         java.util.Set<String> cached = safetyCache;
-        if (cached != null
-            && android.os.SystemClock.elapsedRealtime() - safetyCacheAt < SAFETY_CACHE_TTL_MS) {
-            return cached;
+        boolean stale = cached == null
+            || android.os.SystemClock.elapsedRealtime() - safetyCacheAt > SAFETY_CACHE_TTL_MS;
+        if (stale && safetyResolving.compareAndSet(false, true)) {
+            final Context ctx = appCtx;
+            Thread t = new Thread(() -> {
+                try {
+                    safetyCache = java.util.Collections.unmodifiableSet(resolveSafetyPackages(ctx));
+                    safetyCacheAt = android.os.SystemClock.elapsedRealtime();
+                } catch (Throwable ignored) {
+                } finally {
+                    safetyResolving.set(false);
+                }
+            }, "n2r-safety-resolve");
+            t.setPriority(Thread.MIN_PRIORITY);
+            try { t.start(); } catch (Throwable ignored) { safetyResolving.set(false); }
         }
+        return cached != null ? cached : java.util.Collections.<String>emptySet();
+    }
+
+    private static java.util.Set<String> resolveSafetyPackages(Context appCtx) {
         java.util.Set<String> out = new java.util.HashSet<>();
         try {
             String sms = android.provider.Telephony.Sms.getDefaultSmsPackage(appCtx);
@@ -80,37 +119,37 @@ public class NightToRiseManager {
                 if (dialer != null) out.add(dialer);
             }
         } catch (Throwable ignored) {}
-        // CRITICAL FIX: the home-screen launcher was never exempt, so pressing
-        // Home during a lock window triggered the block screen ON TOP OF the
-        // launcher itself — leaving no way to navigate anywhere (home screen,
-        // notification shade, app switcher all became unreachable, since the
-        // block screen kept re-covering them every poll tick). Every launcher
-        // that could ever be the default (device-dependent — MIUI, stock,
-        // Nova, etc.) must be exempt, resolved dynamically same as SMS/dialer
-        // above rather than hardcoded, since the package name varies by device/ROM.
+        // Every launcher that could ever handle Home must stay reachable, or the
+        // block screen re-covers the home screen on every poll tick.
         try {
             android.content.Intent home = new android.content.Intent(android.content.Intent.ACTION_MAIN);
             home.addCategory(android.content.Intent.CATEGORY_HOME);
             android.content.pm.PackageManager pm = appCtx.getPackageManager();
             android.content.pm.ResolveInfo ri = pm.resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
             if (ri != null && ri.activityInfo != null) out.add(ri.activityInfo.packageName);
-            // Also exempt every app that COULD handle the home intent (covers
-            // cases where the resolver above returns a chooser instead of the
-            // actual launcher, e.g. right after a ROM update reset the default).
             for (android.content.pm.ResolveInfo r : pm.queryIntentActivities(home, 0)) {
                 if (r.activityInfo != null) out.add(r.activityInfo.packageName);
             }
         } catch (Throwable ignored) {}
-        safetyCache = java.util.Collections.unmodifiableSet(out);
-        safetyCacheAt = android.os.SystemClock.elapsedRealtime();
-        return safetyCache;
+        try {
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) appCtx.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) for (android.view.inputmethod.InputMethodInfo im : imm.getEnabledInputMethodList())
+                out.add(im.getPackageName());
+        } catch (Throwable ignored) {}
+        return out;
     }
 
-    /** Drop the cached launcher/SMS/dialer exemptions (config changed, boot, etc.). */
+    /**
+     * Marks the launcher/SMS/dialer exemptions stale. It deliberately keeps the
+     * old set in place: dropping it to null would make every package look
+     * blockable for the split second before the refresh lands, which is exactly
+     * the window that produced the block-screen storm on ColorOS.
+     */
     public static void invalidateSafetyCache() {
-        safetyCache = null;
         safetyCacheAt = 0L;
     }
+
 
 
     public NightToRiseDecider.Config snapshot() {
@@ -147,9 +186,9 @@ public class NightToRiseManager {
 
     /** Compute the current decision for a foreground package. */
     public Decision decide(long nowMs, String foregroundPackage) {
-        NightToRiseDecider.Decision d =
-            NightToRiseDecider.decide(snapshot(), nowMs, foregroundPackage);
-        return new Decision(Phase.valueOf(d.phase.name()), d.shouldBlock, d.endTimeMs, d.message);
+        // Native Sleep to Rise enforcement is retired: blocking now runs through
+        // the Shield block list (driven from JS). Never block from here.
+        return new Decision(Phase.OFF, false, 0L, "");
     }
 
     /**

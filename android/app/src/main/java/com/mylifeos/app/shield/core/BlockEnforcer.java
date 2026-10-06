@@ -55,7 +55,7 @@ public final class BlockEnforcer {
      * otherwise every poll tick re-launches the block activity / re-posts the
      * full-screen notification, which looks exactly like the app crash-looping.
      */
-    private static final long SCREEN_DEDUPE_MS = 4000;
+    private static final long SCREEN_DEDUPE_MS = 10_000;
 
     /** Cooldown on "pull the user out of the app" so HOME is not spammed 1x/sec. */
     private static final long LEAVE_COOLDOWN_MS = 2500;
@@ -125,8 +125,9 @@ public final class BlockEnforcer {
         if (leaveApp == null) return;
         long now = SystemClock.elapsedRealtime();
         if (now - lastLeaveAt < LEAVE_COOLDOWN_MS) return;
+        if (!GlobalActionGovernor.allow(null, "leave")) return;
         lastLeaveAt = now;
-        try { leaveApp.run(); } catch (Throwable t) { Log.w(TAG, "leaveApp failed", t); }
+        try { leaveApp.run(); } catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "leaveApp failed", t); }
     }
 
     /** Called right after the user has been pulled out of a blocked app. */
@@ -146,6 +147,13 @@ public final class BlockEnforcer {
      * itself (otherwise the user is locked out of the very screen that turns
      * the lock off), and our own block screens.
      */
+    /** Substrings of packages that may NEVER be covered by a block screen. */
+    private static final String[] GLOBAL_SAFE_CONTAINS = new String[]{
+        "launcher", "systemui", "settings", "safecenter",
+        "dialer", "telecom", "emergency", "incallui",
+        "inputmethod", "keyboard", "permissioncontroller", "packageinstaller",
+    };
+
     public static boolean isNeverBlockable(Context ctx, String pkg) {
         if (pkg == null || pkg.isEmpty()) return true;
         // Runtime application id is the only authoritative self identity. The
@@ -153,8 +161,16 @@ public final class BlockEnforcer {
         // is com.mylifeosv2.app, so hardcoded prefixes are unsafe here.
         if (pkg.equals(ctx.getApplicationContext().getPackageName())) return true;
         if (pkg.contains("ShieldBlock") || pkg.contains("NightToRise")) return true;
+        if (pkg.equals("android")) return true;
+        // SAFETY-CRITICAL (OPPO/ColorOS reboot): covering the launcher, the
+        // status bar, Settings or the keyboard makes the block screen re-present
+        // on its own output, which floods system_server until its watchdog
+        // restarts the phone. These are never blockable, whatever the config says.
+        String lower = pkg.toLowerCase();
+        for (String s : GLOBAL_SAFE_CONTAINS) if (lower.contains(s)) return true;
         return false;
     }
+
 
     /** Result of one enforcement pass. */
     public static final class Result {
@@ -176,10 +192,13 @@ public final class BlockEnforcer {
      */
     public static Result enforce(Context ctx, String pkg, Runnable leaveApp) {
         if (isNeverBlockable(ctx, pkg)) return Result.NONE;
+        // Global safety valve: while the shared governor is backing off,
+        // nothing (Shield or Sleep to Rise) may cover the screen or go Home.
+        if (GlobalActionGovernor.isBackingOff()) return Result.NONE;
 
         // ---------- 1. Sleep to Rise (allowlist model) ----------
         try {
-            NightToRiseManager n2r = new NightToRiseManager(ctx);
+            NightToRiseManager n2r = NightToRiseManager.get(ctx);
             NightToRiseManager.Decision d = n2r.decide(System.currentTimeMillis(), pkg);
             if (d.shouldBlock) {
                 if (allowScreen(pkg)) {
@@ -216,7 +235,38 @@ public final class BlockEnforcer {
                 n2r.prefs().clearStrictUnlockRequest();
             }
         } catch (Throwable t) {
-            Log.w(TAG, "Sleep to Rise check failed", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "Sleep to Rise check failed", t);
+        }
+
+        // ---------- 1b. Sleep to Rise schedule lock (via Shield list) ----------
+        // An active guard owns the block screen for all apps in its lock set,
+        // including apps also on the user's Shield list. After the window,
+        // those apps use Shield's screen again.
+        try {
+            if (ShieldLockScheduler.isLockedByN2R(ctx, pkg)) {
+                if (allowScreen(pkg)) {
+                    String kind = ShieldLockScheduler.activeKind(ctx);
+                    Intent i = new Intent(ctx, com.mylifeos.app.shield.NightToRiseLockScreen.class);
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+                    i.putExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_KIND, kind);
+                    i.putExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_END_MS, ShieldLockScheduler.activeEnd(ctx));
+                    i.putExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_PACKAGE, pkg);
+                    i.putExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_MESSAGE, ShieldLockScheduler.message(ctx, kind));
+                    // launchBlockScreen reads the package from this extra for logging.
+                    i.putExtra(NightToRiseBlockActivity.EXTRA_PACKAGE, pkg);
+                    boolean rise = "rise".equals(kind);
+                    boolean shown = presentScheduledNightCard(ctx, i, kind, leaveApp);
+                    if (!shown) leave(leaveApp);
+                } else if (!isBlockScreenForeground()) {
+                    leave(leaveApp);
+                }
+                return new Result(true, true);
+            }
+        } catch (Throwable t) {
+            com.mylifeos.app.LifeLog.w2(TAG, "Sleep to Rise lock check failed", t);
         }
 
         // ---------- 2. Shield "Block Apps" list ----------
@@ -241,7 +291,7 @@ public final class BlockEnforcer {
                 return new Result(true, false);
             }
         } catch (Throwable t) {
-            Log.w(TAG, "Shield blocklist check failed", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "Shield blocklist check failed", t);
         }
 
         return Result.NONE;
@@ -279,7 +329,8 @@ public final class BlockEnforcer {
     private static boolean isBlockScreenForeground() {
         String foreground = lastForegroundPackage();
         return foreground != null
-            && (foreground.contains("ShieldBlock") || foreground.contains("NightToRise"));
+            && (foreground.contains("ShieldBlock") || foreground.contains("NightToRise"))
+            || BlockingOverlay.isNightCardShowing();
     }
 
     /**
@@ -291,6 +342,13 @@ public final class BlockEnforcer {
      * Sleep to Rise keeps using launchBlockScreen() below, unchanged.
      */
     public static boolean presentShield(Context ctx, Intent blockIntent, Runnable leaveApp) {
+        if (BlockingOverlay.isNightCardShowing()) return true; // already on screen
+        if (!presentationBreakerAllows()) {
+            com.mylifeos.app.LifeLog.w(TAG, "Sleep to Rise card skipped: presentation breaker open");
+            leave(leaveApp); return false;
+        }
+        // The card itself is not a global action, so the action governor must
+        // not veto it (it used to, silently, so only HOME happened).
         lastBlockAt = System.currentTimeMillis();
         lastBlockedPkg = blockIntent.getStringExtra("BLOCKED_PACKAGE");
 
@@ -298,7 +356,7 @@ public final class BlockEnforcer {
         try {
             spec = ShieldBlockCard.Spec.fromIntent(ctx, blockIntent, false);
         } catch (Throwable t) {
-            Log.w(TAG, "block card spec failed", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "block card spec failed", t);
         }
 
         final Context appCtx = ctx.getApplicationContext() != null ? ctx.getApplicationContext() : ctx;
@@ -310,7 +368,7 @@ public final class BlockEnforcer {
                 home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 appCtx.startActivity(home);
             } catch (Throwable t) {
-                Log.w(TAG, "goHome intent rejected", t);
+                com.mylifeos.app.LifeLog.w2(TAG, "goHome intent rejected", t);
             }
         };
 
@@ -320,7 +378,7 @@ public final class BlockEnforcer {
                 drawn = com.mylifeos.app.shield.ShieldAccessibilityService.showShieldCard(spec, goHome);
                 if (!drawn) drawn = BlockingOverlay.showCardSystem(ctx, spec, goHome);
             } catch (Throwable t) {
-                Log.w(TAG, "block card overlay failed", t);
+                com.mylifeos.app.LifeLog.w2(TAG, "block card overlay failed", t);
             }
             if (drawn) {
                 lastError = null;
@@ -339,7 +397,7 @@ public final class BlockEnforcer {
                 lastError = null;
                 return true;
             } catch (Throwable t) {
-                Log.w(TAG, "startActivity for block screen rejected", t);
+                com.mylifeos.app.LifeLog.w2(TAG, "startActivity for block screen rejected", t);
                 lastError = "startActivity rejected: " + t.getMessage();
             }
         }
@@ -349,10 +407,45 @@ public final class BlockEnforcer {
         return shown;
     }
 
+    /**
+     * SAFETY VALVE (device reboot): a hard ceiling on full-screen presentations
+     * shared by Shield AND Sleep to Rise. If anything ever makes the block
+     * screen re-launch in a tight loop (two engines fighting, OEM quirk, bad
+     * state), we stop presenting surfaces for BREAKER_COOLDOWN_MS and only send
+     * the user Home. Worst case becomes "block screen briefly absent", never
+     * WindowManager/system_server churn that can restart the phone.
+     */
+    private static final int BREAKER_MAX = 6;
+    private static final long BREAKER_WINDOW_MS = 15_000L;
+    private static final long BREAKER_COOLDOWN_MS = 30_000L;
+    private static final long[] breakerTimes = new long[BREAKER_MAX];
+    private static int breakerIdx = 0;
+    private static long breakerTrippedAt = 0L;
+
+    static synchronized boolean presentationBreakerAllows() {
+        long now = SystemClock.elapsedRealtime();
+        if (breakerTrippedAt != 0L && now - breakerTrippedAt < BREAKER_COOLDOWN_MS) return false;
+        breakerTrippedAt = 0L;
+        long oldest = breakerTimes[breakerIdx];
+        if (oldest != 0L && now - oldest < BREAKER_WINDOW_MS) {
+            breakerTrippedAt = now;
+            java.util.Arrays.fill(breakerTimes, 0L);
+            lastError = "presentation breaker tripped (loop protection)";
+            com.mylifeos.app.LifeLog.w2(TAG, lastError);
+            return false;
+        }
+        breakerTimes[breakerIdx] = now;
+        breakerIdx = (breakerIdx + 1) % BREAKER_MAX;
+        return true;
+    }
+
     private static boolean launchBlockScreen(Context ctx, Intent i, String title, String body,
                                              boolean sleepToRise, boolean rise, Runnable leaveApp) {
+        if (!presentationBreakerAllows()) { leave(leaveApp); return false; }
+        if (!GlobalActionGovernor.allow(ctx, "present")) return false;
         lastBlockAt = System.currentTimeMillis();
         lastBlockedPkg = i.getStringExtra(NightToRiseBlockActivity.EXTRA_PACKAGE);
+        com.mylifeos.app.LifeLog.i("Block", (sleepToRise ? "Sleep to Rise" : "Shield") + " block screen for " + lastBlockedPkg + " — " + title);
 
         // Prefer the bound accessibility service itself. Starting from the
         // polling foreground service is restricted on Android 10+, even when
@@ -380,7 +473,7 @@ public final class BlockEnforcer {
                 lastError = null;
                 return true;
             } catch (Throwable t) {
-                Log.w(TAG, "startActivity for block screen rejected", t);
+                com.mylifeos.app.LifeLog.w2(TAG, "startActivity for block screen rejected", t);
                 lastError = "startActivity rejected: " + t.getMessage();
             }
         } else {
@@ -400,6 +493,35 @@ public final class BlockEnforcer {
             return true;
         }
         return showFullScreenFallback(ctx, i, title, body);
+    }
+
+    /** The Java card is drawn as an accessibility overlay first: ColorOS can
+     * silently discard background Activity launches without throwing. Never
+     * launch the Activity as well when the overlay was successfully drawn. */
+    private static boolean presentScheduledNightCard(Context ctx, Intent intent, String kind, Runnable leaveApp) {
+        if (!presentationBreakerAllows()) { leave(leaveApp); return false; }
+        if (!GlobalActionGovernor.allow(ctx, "present")) return false;
+        lastBlockAt = System.currentTimeMillis();
+        lastBlockedPkg = intent.getStringExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_PACKAGE);
+        boolean rise = "rise".equals(kind);
+        String message = intent.getStringExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_MESSAGE);
+        long end = intent.getLongExtra(com.mylifeos.app.shield.NightToRiseLockScreen.EXTRA_END_MS, 0L);
+        Runnable home = () -> leave(leaveApp);
+        if (com.mylifeos.app.shield.ShieldAccessibilityService.showScheduledNightCard(
+                rise, message, end, home)
+            || BlockingOverlay.showScheduledNightCardSystem(ctx, rise, message, end, home)) {
+            lastError = null;
+            com.mylifeos.app.LifeLog.i(TAG, "Sleep to Rise card shown for " + lastBlockedPkg);
+            return true;
+        }
+        // Only the fallback Activity is launched; no second full-screen surface.
+        com.mylifeos.app.LifeLog.w(TAG, "Sleep to Rise overlay unavailable (accessibility/overlay permission?) — trying screen");
+        if (com.mylifeos.app.shield.ShieldAccessibilityService.launchBlockActivity(intent)) return true;
+        if (canStartActivityFromBackground(ctx)) {
+            try { ctx.startActivity(intent); return true; }
+            catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "Night card Activity rejected", t); }
+        }
+        return showFullScreenFallback(ctx, intent, "Sleep to Rise", rise ? "Rise Guard" : "Sleep Guard");
     }
 
     /** Android 14+ auto-revokes full-screen-intent for ordinary apps. */
@@ -452,7 +574,7 @@ public final class BlockEnforcer {
             nm.notify(4021, n);
             return true;
         } catch (Throwable t) {
-            Log.w(TAG, "full-screen fallback failed", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "full-screen fallback failed", t);
             lastError = "full-screen fallback failed: " + t.getMessage();
             return false;
         }

@@ -100,6 +100,8 @@ public final class ShieldBlockCard {
         public int glow1 = 0xFFEC4899;
         public int glow2 = 0xFF3B82F6;
         public boolean countdown = true;
+        public boolean showCountdownRing = false;
+        public long escRemainingMsAtOpen = 0L;
         public String ghostLabel;
         public Drawable appIcon;
         public Bitmap backdropImage;
@@ -174,6 +176,19 @@ public final class ShieldBlockCard {
                     int mins = (int) Math.max(1, (escMs + 59_999L) / 60_000L);
                     s.chipIcon = ICON_CLOCK;
                     s.chipText = "Paused · " + fmtShort(mins) + " left";
+                    // Reuse the same large ring the daily-limit screen uses, so remaining
+                    // time reads clearly at a glance instead of only in the small chip.
+                    // The actual escalation duration (5 min, 30 min, etc.) is controlled
+                    // elsewhere and isn't known here — so rather than assume a fixed
+                    // ceiling, the ring treats "however much time is left right now" as
+                    // its own 100% starting point, then counts down live to 0 as
+                    // RingView itself ticks it down. That's correct no matter what the
+                    // real duration is.
+                    s.showCountdownRing = true;
+                    s.escRemainingMsAtOpen = escMs;
+                    s.ringBig = fmtBig(mins);
+                    s.ringLabel = "remaining";
+                    s.ringProgress = 1f;
                 }
             } else {
                 s.kind = Kind.APP;
@@ -639,6 +654,12 @@ public final class ShieldBlockCard {
             super.onDetachedFromWindow();
         }
 
+        /** Used by the live escalation countdown to update the ring once per second. */
+        void setProgress(float p) {
+            this.progress = p;
+            invalidate();
+        }
+
         @Override protected void onDraw(Canvas c) {
             float s = Math.min(getWidth(), getHeight());
             float stroke = s * 8f / 120f;
@@ -750,6 +771,42 @@ public final class ShieldBlockCard {
         return new Root(ctx, spec, cb);
     }
 
+    /**
+     * Paints a translucent dark scrim with a soft off-center radial glow tinted with the
+     * block card's accent colors. Pure Canvas + shaders, no bitmap capture of the app
+     * behind it and no RenderEffect — safe on every Android version this app supports.
+     */
+    private static final class GlowScrimDrawable extends Drawable {
+        private final int glowA, glowB;
+        private final Paint scrim = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        GlowScrimDrawable(int glowA, int glowB) {
+            this.glowA = glowA;
+            this.glowB = glowB;
+            scrim.setColor(0xB3090C16); // ~70% opaque near-black-navy scrim
+        }
+
+        @Override public void draw(Canvas canvas) {
+            android.graphics.Rect b = getBounds();
+            if (b.width() <= 0 || b.height() <= 0) return;
+
+            canvas.drawRect(b, scrim);
+
+            float cx = b.width() * 0.5f;
+            float cy = b.height() * 0.32f;
+            float radius = Math.max(b.width(), b.height()) * 0.75f;
+            glow.setShader(new RadialGradient(cx, cy, radius,
+                new int[]{alpha(glowA, 46), alpha(glowB, 18), alpha(glowB, 0)},
+                new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRect(b, glow);
+        }
+
+        @Override public void setAlpha(int alpha) {}
+        @Override public void setColorFilter(android.graphics.ColorFilter cf) {}
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
     private static final class Root extends FrameLayout {
         private final Spec spec;
         private final Callbacks cb;
@@ -758,6 +815,27 @@ public final class ShieldBlockCard {
         private int remaining = 3;
         private boolean fired = false;
         private boolean attached = false;
+
+        // Live escalation-ring countdown (separate from the CTA auto-close tick above).
+        // Only active for a CONTENT block that has remaining escalation time; treats
+        // whatever time was left the moment the card opened as this block's own 100%.
+        private RingView liveRing;
+        private TextView liveRingBigLabel;
+        private long liveRingStartMs = 0L;
+        private long liveRingOpenedAtRealtime = 0L;
+
+        private final Runnable ringTick = new Runnable() {
+            @Override public void run() {
+                if (!attached || liveRing == null || liveRingStartMs <= 0) return;
+                long elapsed = android.os.SystemClock.elapsedRealtime() - liveRingOpenedAtRealtime;
+                long remainingMs = Math.max(0L, liveRingStartMs - elapsed);
+                float progress = liveRingStartMs > 0 ? (float) remainingMs / (float) liveRingStartMs : 0f;
+                liveRing.setProgress(Math.max(0f, Math.min(1f, progress)));
+                int mins = (int) Math.max(0, (remainingMs + 59_999L) / 60_000L);
+                if (liveRingBigLabel != null) liveRingBigLabel.setText(fmtBig(mins));
+                if (remainingMs > 0) handler.postDelayed(this, 1000);
+            }
+        };
 
         private final Runnable tick = new Runnable() {
             @Override public void run() {
@@ -790,11 +868,18 @@ public final class ShieldBlockCard {
                 handler.removeCallbacks(tick);
                 handler.postDelayed(tick, 1000);
             }
+            if (liveRing != null && liveRingStartMs > 0) {
+                handler.removeCallbacks(ringTick);
+                // Wait for RingView's own ~1300ms open animation to settle first, so the
+                // live countdown doesn't fight with (and visually jump past) that animation.
+                handler.postDelayed(ringTick, 1400);
+            }
         }
 
         @Override protected void onDetachedFromWindow() {
             attached = false;
             handler.removeCallbacks(tick);
+            handler.removeCallbacks(ringTick);
             super.onDetachedFromWindow();
         }
 
@@ -823,13 +908,16 @@ public final class ShieldBlockCard {
             float d = dm.density;
             float em = Math.max(14f * d, Math.min(22f * d, 0.043f * Math.min(W, H)));
             boolean compact = !land && (H / d) < 640f;
-            boolean hasVis = spec.kind != Kind.CONTENT;
+            boolean hasVis = spec.kind != Kind.CONTENT || spec.showCountdownRing;
 
-            // [SHIELD-CARD] No backdrop layer: the window itself is translucent (set by the
-            // overlay/activity host), so only the floating card is visible — nothing is drawn
-            // behind it. BackdropView is kept unused rather than deleted in case a future
-            // request brings a background back; it costs nothing sitting idle.
-            setBackgroundColor(Color.TRANSPARENT);
+            // [SHIELD-CARD] Soft dim + glow scrim behind the card. This is NOT a pixel blur of
+            // whatever app is underneath (that would need a cross-app screenshot, which isn't
+            // reliably available across the Android versions this app supports) — it's a
+            // translucent dark layer with a soft radial glow in the spec's accent color,
+            // drawn with plain Canvas gradients. Works identically on every supported Android
+            // version (no RenderEffect / API 31+ dependency), and keeps the card as the clear
+            // visual focus without a flat, fully-opaque backdrop.
+            setBackground(new GlowScrimDrawable(spec.a1, spec.a2));
 
             ScrollView scroll = new ScrollView(ctx);
             scroll.setFillViewport(true);
@@ -883,19 +971,29 @@ public final class ShieldBlockCard {
             // ---- visual (ring / tile) ----
             View vis = null;
             int visPx = Math.round(em * (compact ? 8f : (land ? 9f : 10f)));
-            if (spec.kind == Kind.LIMIT) {
+            boolean useRing = spec.kind == Kind.LIMIT
+                || (spec.kind == Kind.CONTENT && spec.showCountdownRing);
+            if (useRing) {
                 FrameLayout ringBox = new FrameLayout(ctx);
-                ringBox.addView(new RingView(ctx, spec),
+                RingView ringView = new RingView(ctx, spec);
+                ringBox.addView(ringView,
                     new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                 LinearLayout center = new LinearLayout(ctx);
                 center.setOrientation(LinearLayout.VERTICAL);
                 center.setGravity(Gravity.CENTER);
-                center.addView(text(spec.ringBig, em * (compact || land ? 1.5f : 1.85f), COLOR_TEXT, true, Gravity.CENTER));
+                TextView ringBigLabel = text(spec.ringBig, em * (compact || land ? 1.5f : 1.85f), COLOR_TEXT, true, Gravity.CENTER);
+                center.addView(ringBigLabel);
                 TextView lbl = text(spec.ringLabel, em * 0.82f, COLOR_TEXT2, false, Gravity.CENTER);
                 center.addView(lbl);
                 ringBox.addView(center, new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                 vis = ringBox;
+                if (spec.kind == Kind.CONTENT && spec.escRemainingMsAtOpen > 0) {
+                    this.liveRing = ringView;
+                    this.liveRingBigLabel = ringBigLabel;
+                    this.liveRingStartMs = spec.escRemainingMsAtOpen;
+                    this.liveRingOpenedAtRealtime = android.os.SystemClock.elapsedRealtime();
+                }
             } else if (hasVis) {
                 vis = new TileView(ctx, spec, em * (compact ? 0.86f : (land ? 0.9f : 1f)));
             }

@@ -7,6 +7,7 @@ const MISSION_NAMES: Record<string, string> = {
   barcode: 'Barcode',
   typing: 'Typing',
   memory: 'Memory',
+  steps: 'Steps',
   none: 'Tap to dismiss',
 };
 

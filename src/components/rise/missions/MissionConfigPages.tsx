@@ -16,12 +16,18 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, X, Camera, RefreshCw, Check, Zap, Calculator, QrCode, Smartphone, Type, ChevronUp, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, X, Camera, RefreshCw, Check, Calculator, QrCode, Smartphone, Type, Footprints, Minus, Plus, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { isNative } from '@/lib/capacitor/platform';
 import { lightImpact, mediumImpact, selectionChanged, successNotification, errorNotification } from '@/lib/capacitor/nativeHaptics';
 import { cn } from '@/lib/utils';
+import { MathMission } from '@/components/rise/missions/MathMission';
+import { ShakeMission } from '@/components/rise/missions/ShakeMission';
+import { BarcodeMission } from '@/components/rise/missions/BarcodeMission';
+import { PhotoMission } from '@/components/rise/missions/PhotoMission';
+import { TypingMission } from '@/components/rise/missions/TypingMission';
+import { StepMission, requiredStepsFor } from '@/components/rise/missions/StepMission';
 
 /* ─── Types ────────────────────────────────────────────── */
 export type MissionDifficulty = 'easy' | 'medium' | 'hard';
@@ -45,12 +51,13 @@ interface RouterProps {
 
 export function MissionConfigRouter({ missionId, value, onSave, onClose }: RouterProps) {
   return createPortal(
-    <div className="fixed inset-0 z-[99999] bg-black flex flex-col">
+    <div className="fixed inset-0 z-[99999] flex h-[100dvh] flex-col overflow-hidden overscroll-contain bg-background text-foreground">
       {missionId === 'math'  && <MathConfigPage    value={value} onSave={onSave} onClose={onClose} />}
       {missionId === 'shake' && <ShakeConfigPage   value={value} onSave={onSave} onClose={onClose} />}
       {(missionId === 'qr' || missionId === 'barcode') && <QrConfigPage value={value} onSave={onSave} onClose={onClose} />}
       {missionId === 'photo' && <PhotoConfigPage   value={value} onSave={onSave} onClose={onClose} />}
       {missionId === 'typing' && <TypingConfigPage value={value} onSave={onSave} onClose={onClose} />}
+      {missionId === 'steps' && <StepsConfigPage value={value} onSave={onSave} onClose={onClose} />}
     </div>,
     document.body,
   );
@@ -65,15 +72,21 @@ export function MissionConfigRouter({ missionId, value, onSave, onClose }: Route
 function ConfigHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
   const handle = () => { void lightImpact(); (onBack ?? onClose)(); };
   return (
-    <div className="flex items-center gap-3 px-4 py-4 shrink-0">
-      <button
+    <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-4 py-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
         onClick={handle}
         aria-label={onBack ? 'Back' : 'Close'}
-        className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 active:scale-95 transition-transform"
+        className="h-10 w-10 rounded-full bg-muted active:scale-95"
       >
-        {onBack ? <ArrowLeft className="h-5 w-5 text-white" /> : <X className="h-5 w-5 text-white" />}
-      </button>
-      <span className="text-white font-bold text-base">{title}</span>
+        {onBack ? <ArrowLeft className="h-5 w-5" /> : <X className="h-5 w-5" />}
+      </Button>
+      <div>
+        <span className="block text-base font-bold">{title}</span>
+        <span className="block text-xs text-muted-foreground">Wake-up challenge</span>
+      </div>
     </div>
   );
 }
@@ -82,41 +95,25 @@ function ConfigHeader({ title, onBack, onClose }: { title: string; onBack?: () =
 function CountPicker({ value, onChange, max = 10, label = 'times' }: { value: number; onChange: (n: number) => void; max?: number; label?: string }) {
   const step = (n: number) => { void selectionChanged(); onChange(n); };
   return (
-    <div className="flex items-center justify-center gap-8 bg-white/5 rounded-2xl py-4">
-      <div className="flex flex-col items-center w-28">
-        <button
-          onClick={() => step(Math.max(1, value - 1))}
-          aria-label="Decrease"
-          className="p-2 active:scale-90 transition-transform"
-        >
-          <ChevronUp className="h-5 w-5 text-white/40" />
-        </button>
-        <div className="relative h-24 overflow-hidden w-full flex flex-col items-center">
-          {[-1, 0, 1].map((offset) => {
-            const num = value + offset;
-            const inRange = num >= 1 && num <= max;
-            return (
-              <div
-                key={offset}
-                className={cn(
-                  'h-8 flex items-center justify-center text-2xl font-bold transition-all',
-                  offset === 0 ? 'text-white scale-125' : 'text-white/25 scale-90',
-                )}
-              >
-                {inRange ? num : ''}
-              </div>
-            );
-          })}
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold">Repetitions</p>
+          <p className="text-xs text-muted-foreground">How many {label} to finish</p>
         </div>
-        <button
-          onClick={() => step(Math.min(max, value + 1))}
-          aria-label="Increase"
-          className="p-2 active:scale-90 transition-transform"
-        >
-          <ChevronDown className="h-5 w-5 text-white/40" />
-        </button>
+        <p className="text-2xl font-black tabular-nums text-primary">{value}</p>
       </div>
-      <span className="text-white/60 text-base">{label}</span>
+      <div className="grid grid-cols-[3rem_1fr_3rem] items-center gap-3">
+        <Button type="button" variant="outline" size="icon" onClick={() => step(Math.max(1, value - 1))} disabled={value <= 1} aria-label="Decrease repetitions">
+          <Minus className="h-5 w-5" />
+        </Button>
+        <div className="h-2 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${(value / max) * 100}%` }} />
+        </div>
+        <Button type="button" variant="outline" size="icon" onClick={() => step(Math.min(max, value + 1))} disabled={value >= max} aria-label="Increase repetitions">
+          <Plus className="h-5 w-5" />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -124,35 +121,26 @@ function CountPicker({ value, onChange, max = 10, label = 'times' }: { value: nu
 // Difficulty slider — the only place difficulty is configured (removed from the alarm editor summary)
 function DifficultySlider({ value, onChange }: { value: MissionDifficulty; onChange: (d: MissionDifficulty) => void }) {
   const levels: MissionDifficulty[] = ['easy', 'medium', 'hard'];
-  const idx = levels.indexOf(value);
   return (
-    <div className="bg-white/5 rounded-2xl p-4">
-      <p className="text-white/40 text-[11px] uppercase tracking-wider text-center">Difficulty</p>
-      <p className="text-white font-bold text-center text-xl mb-4 capitalize">{value}</p>
-      <div className="relative px-2">
-        <div className="h-1.5 bg-white/10 rounded-full" />
-        <div
-          className="absolute top-0 h-1.5 bg-cyan-400 rounded-full transition-all"
-          style={{ width: `${(idx / 2) * 100}%` }}
-        />
-        <input
-          type="range"
-          min={0}
-          max={2}
-          value={idx}
-          aria-label="Difficulty"
-          onChange={(e) => { void selectionChanged(); onChange(levels[parseInt(e.target.value)]); }}
-          className="absolute inset-0 opacity-0 w-full cursor-pointer"
-        />
-        {/* thumb */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-6 h-6 bg-white rounded-full shadow-lg transition-all"
-          style={{ left: `calc(${(idx / 2) * 100}% - 12px)` }}
-        />
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-3">
+        <p className="text-sm font-semibold">Difficulty</p>
+        <p className="text-xs text-muted-foreground">Choose how demanding it should be</p>
       </div>
-      <div className="flex justify-between mt-3">
-        <span className="text-white/40 text-xs">Easy</span>
-        <span className="text-white/40 text-xs">Hard</span>
+      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">
+        {levels.map((level) => (
+          <Button
+            key={level}
+            type="button"
+            variant={value === level ? 'default' : 'outline'}
+            role="radio"
+            aria-checked={value === level}
+            onClick={() => { void selectionChanged(); onChange(level); }}
+            className="h-11 px-2 capitalize"
+          >
+            {level}
+          </Button>
+        ))}
       </div>
     </div>
   );
@@ -161,21 +149,24 @@ function DifficultySlider({ value, onChange }: { value: MissionDifficulty; onCha
 // Bottom action buttons
 function ActionButtons({ onPreview, onComplete, previewLabel = 'Preview' }: { onPreview?: () => void; onComplete: () => void; previewLabel?: string }) {
   return (
-    <div className="flex gap-3 px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 shrink-0">
+    <div className="flex shrink-0 gap-3 border-t border-border bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 backdrop-blur-sm">
       {onPreview && (
-        <button
+        <Button
+          type="button"
+          variant="outline"
           onClick={() => { void lightImpact(); onPreview(); }}
-          className="flex-1 h-14 rounded-2xl bg-white/10 text-white font-bold text-base active:scale-[0.98] transition-transform"
+          className="h-12 flex-1 font-bold"
         >
           {previewLabel}
-        </button>
+        </Button>
       )}
-      <button
+      <Button
+        type="button"
         onClick={() => { void mediumImpact(); onComplete(); }}
-        className="flex-1 h-14 rounded-2xl bg-white text-black font-bold text-base active:scale-[0.98] transition-transform"
+        className="h-12 flex-1 font-bold"
       >
-        Complete
-      </button>
+        Save
+      </Button>
     </div>
   );
 }
@@ -187,24 +178,29 @@ function ActionButtons({ onPreview, onComplete, previewLabel = 'Preview' }: { on
  */
 function PreviewShell({ title, onExit, children }: { title: string; onExit: () => void; children: React.ReactNode }) {
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-[#07090F]">
-      <div className="flex items-center gap-3 px-4 py-4 shrink-0 pt-[max(env(safe-area-inset-top),1rem)]">
-        <button
+    <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden bg-background">
+      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-4 py-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
           onClick={() => { void lightImpact(); onExit(); }}
           aria-label="Exit preview"
-          className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 active:scale-95 transition-transform"
+          className="h-10 w-10 rounded-full bg-muted"
         >
-          <X className="h-5 w-5 text-white" />
-        </button>
+          <X className="h-5 w-5" />
+        </Button>
         <div>
-          <p className="text-white font-bold text-base leading-tight">{title}</p>
-          <p className="text-white/40 text-[11px]">Preview — how it looks when the alarm rings</p>
+          <p className="text-base font-bold leading-tight">{title}</p>
+          <p className="text-xs text-muted-foreground">Alarm preview</p>
         </div>
       </div>
-      {children}
+      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
     </div>
   );
 }
+
+const setupScrollerClass = 'min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y px-4 pb-6';
 
 
 /* ══════════════════════════════════════════════════════════
@@ -303,7 +299,7 @@ function MathConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSa
       <ConfigHeader title="Math" onClose={onClose} />
 
       {/* SETUP — no keypad here, only a static sample of the problem */}
-      <div className="flex-1 flex flex-col px-4 gap-4 overflow-auto">
+      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
         <div className="bg-[#1A1D26] rounded-2xl p-6">
           <div className="flex items-center justify-center gap-2 mb-3">
             <Calculator className="h-4 w-4 text-cyan-400" />
@@ -378,6 +374,7 @@ function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
   const [difficulty, setDifficulty] = useState<MissionDifficulty>(value.difficulty ?? 'easy');
   const [count, setCount]           = useState(value.count ?? 3);
   const [shakeDemo, setShakeDemo]   = useState(0);
+  const [previewing, setPreviewing] = useState(false);
 
   // Shake demo animation on interval
   useEffect(() => {
@@ -388,10 +385,10 @@ function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
   const requiredShakes = count * (difficulty === 'hard' ? 15 : difficulty === 'easy' ? 5 : 10);
 
   return (
-    <div className="flex flex-col h-full bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
       <ConfigHeader title="Shake" onClose={onClose} />
 
-      <div className="flex-1 flex flex-col px-4 gap-4 overflow-auto">
+      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
 
         {/* Preview */}
         <div className="bg-[#1A1D26] rounded-2xl p-6 flex flex-col items-center">
@@ -414,8 +411,61 @@ function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
       </div>
 
       <ActionButtons
+        onPreview={() => setPreviewing(true)}
         onComplete={() => { onSave({ ...value, difficulty, count }); toast.success('Shake mission configured ✓'); onClose(); }}
       />
+      {previewing && (
+        <PreviewShell title="Shake challenge" onExit={() => setPreviewing(false)}>
+          <ShakeMission requiredShakes={requiredShakes} onComplete={() => {
+            toast.success('Preview complete — alarm would dismiss ✓');
+            setPreviewing(false);
+          }} />
+        </PreviewShell>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   2b. STEPS CONFIG — walk to dismiss
+   ══════════════════════════════════════════════════════════ */
+
+function StepsConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
+  const [difficulty, setDifficulty] = useState<MissionDifficulty>(value.difficulty ?? 'medium');
+  const [count, setCount]           = useState(value.count ?? 3);
+  const [previewing, setPreviewing] = useState(false);
+  const per = difficulty === 'hard' ? 40 : difficulty === 'easy' ? 10 : 20;
+  const total = count * per;
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
+      <ConfigHeader title="Steps" onClose={onClose} />
+      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
+        <div className="bg-[#1A1D26] rounded-2xl p-6 flex flex-col items-center">
+          <Footprints className="h-20 w-20 text-emerald-400 animate-pulse" />
+          <p className="text-white text-lg font-bold mt-4">Walk {total} steps</p>
+          <p className="text-white/40 text-sm mt-1 text-center">The alarm stops only after you get out of bed and walk.</p>
+        </div>
+        <DifficultySlider value={difficulty} onChange={setDifficulty} />
+        <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
+        <div className="bg-white/5 rounded-xl p-3">
+          <p className="text-white/40 text-xs text-center">
+            Total steps: <span className="text-white font-bold">{total}</span> · fast shaking is not counted
+          </p>
+        </div>
+      </div>
+      <ActionButtons
+        onPreview={() => setPreviewing(true)}
+        onComplete={() => { onSave({ ...value, difficulty, count }); toast.success('Step mission configured ✓'); onClose(); }}
+      />
+      {previewing && (
+        <PreviewShell title="Steps challenge" onExit={() => setPreviewing(false)}>
+          <StepMission requiredSteps={total} onComplete={() => {
+            toast.success('Preview complete — alarm would dismiss ✓');
+            setPreviewing(false);
+          }} />
+        </PreviewShell>
+      )}
     </div>
   );
 }
@@ -427,6 +477,7 @@ function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
 function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
   const [scanned, setScanned]           = useState(value.targetBarcode ?? '');
   const [isScanning, setIsScanning]     = useState(false);
+  const [previewing, setPreviewing]     = useState(false);
   const manualRef                        = useRef<HTMLInputElement>(null);
 
   const doScan = async () => {
@@ -452,10 +503,10 @@ function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
       <ConfigHeader title="QR/Barcode" onClose={onClose} />
 
-      <div className="flex-1 flex flex-col items-center px-6 gap-6 overflow-auto pt-4">
+      <div className={cn(setupScrollerClass, 'flex flex-col items-center gap-5 pt-4')}>
         <p className="text-white text-2xl font-bold text-center leading-snug">
           Scan a code of a part of{'\n'}your morning routine
         </p>
@@ -493,27 +544,48 @@ function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave
         </p>
       </div>
 
-      {/* Scan button */}
-      <div className="px-4 pb-3 shrink-0">
-        <button
+      <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-border bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 backdrop-blur-sm">
+        <Button
+          type="button"
           onClick={doScan}
           disabled={isScanning}
-          className="w-full h-14 rounded-2xl bg-white/10 text-white font-bold text-base mb-3 disabled:opacity-50"
+          variant="outline"
+          className="h-12 font-bold"
         >
           {isScanning ? 'Opening scanner...' : scanned ? 'Re-scan' : 'Scan'}
-        </button>
-        <button
+        </Button>
+        <Button
+          type="button"
           onClick={() => {
-            if (!scanned && isNative) { toast.error('Please scan a barcode first'); return; }
-            onSave({ ...value, targetBarcode: scanned || 'WAKE-UP' });
+            if (!scanned) { toast.error('Register a QR code or barcode first'); return; }
+            setPreviewing(true);
+          }}
+          variant="outline"
+          className="h-12 font-bold"
+        >
+          Preview
+        </Button>
+        <Button
+          type="button"
+          onClick={() => {
+            if (!scanned.trim()) { toast.error('Please register a barcode first'); return; }
+            onSave({ ...value, targetBarcode: scanned.trim() });
             toast.success('QR/Barcode mission configured ✓');
             onClose();
           }}
-          className="w-full h-14 rounded-2xl bg-white text-black font-bold text-base"
+          className="col-span-2 h-12 font-bold"
         >
-          Complete
-        </button>
+          Save
+        </Button>
       </div>
+      {previewing && (
+        <PreviewShell title="QR/Barcode challenge" onExit={() => setPreviewing(false)}>
+          <BarcodeMission targetBarcode={scanned} onComplete={() => {
+            toast.success('Preview complete — alarm would dismiss ✓');
+            setPreviewing(false);
+          }} />
+        </PreviewShell>
+      )}
     </div>
   );
 }
@@ -526,6 +598,7 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(value.photoDataUrl ?? null);
   const [location,     setLocation]     = useState(value.photoLocation ?? '');
   const [capturing,    setCapturing]    = useState(false);
+  const [previewing,   setPreviewing]   = useState(false);
   const fileRef                          = useRef<HTMLInputElement>(null);
 
   const takePhoto = async () => {
@@ -563,10 +636,10 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
       <ConfigHeader title="Photo" onClose={onClose} />
 
-      <div className="flex-1 flex flex-col items-center px-6 gap-4 overflow-auto pt-2">
+      <div className={cn(setupScrollerClass, 'flex flex-col items-center gap-4 pt-3')}>
         <p className="text-white text-2xl font-bold text-center leading-snug">
           Take a photo of a part of{'\n'}your morning routine
         </p>
@@ -635,19 +708,43 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
 
       <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
 
-      <div className="px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3 shrink-0">
-        <button
+      <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-border bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 backdrop-blur-sm">
+        <Button
+          type="button"
+          variant="outline"
           onClick={() => {
-            if (!photoDataUrl && isNative) { toast.error('Please take a photo first'); return; }
-            onSave({ ...value, photoDataUrl: photoDataUrl ?? undefined, photoLocation: location || 'Morning spot' });
+            if (!photoDataUrl) { toast.error('Take a reference photo first'); return; }
+            setPreviewing(true);
+          }}
+          className="h-12 font-bold"
+        >
+          Preview
+        </Button>
+        <Button
+          type="button"
+          onClick={() => {
+            if (!photoDataUrl) { toast.error('Please take a reference photo first'); return; }
+            onSave({ ...value, photoDataUrl, photoLocation: location.trim() || 'Morning spot' });
             toast.success('Photo mission configured ✓');
             onClose();
           }}
-          className="w-full h-14 rounded-2xl bg-white text-black font-bold text-base"
+          className="h-12 font-bold"
         >
-          Complete
-        </button>
+          Save
+        </Button>
       </div>
+      {previewing && photoDataUrl && (
+        <PreviewShell title="Photo challenge" onExit={() => setPreviewing(false)}>
+          <PhotoMission
+            registeredPlace={location.trim() || 'your morning spot'}
+            registeredPhotoUrl={photoDataUrl}
+            onComplete={() => {
+              toast.success('Preview complete — alarm would dismiss ✓');
+              setPreviewing(false);
+            }}
+          />
+        </PreviewShell>
+      )}
     </div>
   );
 }
@@ -723,7 +820,7 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
     return (
       <div className="flex flex-col h-full bg-[#0E1117]">
         <ConfigHeader title="Select phrase" onBack={() => setShowPhraseList(false)} onClose={onClose} />
-        <div className="flex-1 overflow-auto px-4 gap-2 flex flex-col pb-6">
+        <div className={cn(setupScrollerClass, 'flex flex-col gap-2 pt-3')}>
           {/* Custom */}
           <div className="mb-2">
             <p className="text-white/40 text-xs mb-1.5">Custom phrase</p>
@@ -770,7 +867,7 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
       <ConfigHeader title="Typing" onClose={onClose} />
 
       {/* SETUP — read-only example, no text field so the keyboard stays closed */}
-      <div className="flex-1 flex flex-col px-4 gap-4 overflow-auto pt-2">
+      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
         <div className="bg-[#1A1D26] rounded-2xl p-5 flex flex-col gap-3">
           <div className="flex items-center justify-center gap-2">
             <Type className="h-4 w-4 text-cyan-400" />

@@ -93,6 +93,20 @@ export default function NightToRisePage() {
   const [pauseReason, setPauseReason] = useState<PauseReason>('Other');
   const [strictDialog, setStrictDialog] = useState(false);
   const [chronoOpen, setChronoOpen] = useState(false);
+
+  // Device-safety notice: native side turned Sleep to Rise off after detecting
+  // a block-screen flood right before a restart.
+  useEffect(() => {
+    import('@/lib/capacitor/nightToRiseBridge').then(async ({ nightToRiseBridge }) => {
+      const st = await nightToRiseBridge.getStatus();
+      if (st?.safeModeNotice) {
+        toast.warning('Sleep to Rise was turned off to protect your phone', {
+          description: 'Blocking repeated too fast before a restart. Review your allowed apps, then turn it on again.',
+          duration: 12000,
+        });
+      }
+    });
+  }, []);
   const [, tick] = useState(0);
 
   // Live second-tick only while an emergency unlock countdown is running.

@@ -74,6 +74,8 @@ public class MainActivity extends BridgeActivity {
     if (alarmLaunch) {
       try { setTheme(R.style.AppTheme_AlarmLaunch); } catch (Throwable ignored) {}
     }
+    try { com.mylifeos.app.LifeLog.init(this); com.mylifeos.app.LifeLog.i("App", "MainActivity.onCreate"); } catch (Throwable ignored) {}
+    try { registerPlugin(com.mylifeos.app.plugins.LifeLogPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "LifeLogPlugin register failed", t); }
     try { registerPlugin(ShieldPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "ShieldPlugin register failed", t); }
     try { registerPlugin(RiseAlarmPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "RiseAlarmPlugin register failed", t); }
     try { registerPlugin(PureShieldPlugin.class); } catch (Throwable t) { Log.e("MainActivity", "PureShieldPlugin register failed", t); }

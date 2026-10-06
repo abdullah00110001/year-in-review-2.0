@@ -180,7 +180,7 @@ const AppContent = () => {
         <Route path="/future-letter" element={<ProtectedRoute><FutureLetter /></ProtectedRoute>} />
         <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-        <Route path="/activity-log" element={<ProtectedRoute><ActivityLog /></ProtectedRoute>} />
+        <Route path="/activity-log" element={<ActivityLog />} />
         <Route path="/activity-log/:source" element={<ProtectedRoute><ActivityLog /></ProtectedRoute>} />
         <Route path="/wrapped" element={<ProtectedRoute><YearEndWrapped /></ProtectedRoute>} />
         <Route path="/export" element={<ProtectedRoute><DataExport /></ProtectedRoute>} />

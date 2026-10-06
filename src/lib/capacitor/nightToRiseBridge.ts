@@ -51,28 +51,29 @@ export interface NativeLockStatus {
   locking: boolean;
   endTimeMs: number;
   accessibilityEnabled: boolean;
+  /** True once after Sleep to Rise auto-disabled itself for device safety. */
+  safeModeNotice?: boolean;
 }
 
 const Plugin = registerPlugin<NightToRiseNativePlugin>('NightToRise');
 
 const isAndroid = Capacitor.getPlatform() === 'android';
 
+/**
+ * Sleep to Rise no longer uses its own native enforcement — blocking goes
+ * through Shield (see lib/rise/n2rShieldBlocker). setConfig only pushes a
+ * DISABLED config once so any previously armed native lock is switched off.
+ */
+let nativeDisarmed = false;
+
 export const nightToRiseBridge = {
   async setConfig(cfg: NightToRiseConfig): Promise<void> {
-    if (!isAndroid) return;
-    try { await Plugin.setConfig({ json: JSON.stringify(cfg) }); } catch (e) {
-      console.warn('[NightToRise bridge] setConfig failed', e);
-    }
+    if (!isAndroid || nativeDisarmed) return;
+    nativeDisarmed = true;
+    try { await Plugin.setConfig({ json: JSON.stringify({ ...cfg, enabled: false }) }); } catch { /* plugin gone */ }
   },
-  /**
-   * @param days weekdays (0=Sun..6=Sat) the alarm actually rings on. Empty
-   * means daily. Rise Guard must never lock a morning with no alarm.
-   */
-  async setRiseAlarm(epochMillis: number, days: number[] = []): Promise<void> {
-    if (!isAndroid) return;
-    try { await Plugin.setRiseAlarm({ epochMillis, days }); } catch (e) {
-      console.warn('[NightToRise bridge] setRiseAlarm failed', e);
-    }
+  async setRiseAlarm(_epochMillis: number, _days: number[] = []): Promise<void> {
+    return;
   },
   /**
    * NEW: check whether the native block screen's "Emergency unlock" was

@@ -42,7 +42,8 @@ import {
   Bell,
   Clock,
   Type,
-} from 'lucide-react';
+  Footprints,
+ } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -130,6 +131,7 @@ const MISSIONS = [
   { id: 'qr',     name: 'QR/Bar', icon: QrCode },
   { id: 'photo',  name: 'Photo',  icon: Camera },
   { id: 'typing', name: 'Typing', icon: Type },
+  { id: 'steps',  name: 'Steps',  icon: Footprints },
   { id: 'none',   name: 'None',   icon: X },
 ];
 

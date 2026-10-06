@@ -131,7 +131,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
             svc.startActivity(intent);
             return true;
         } catch (Throwable t) {
-            Log.w(TAG, "Accessibility block-screen launch rejected", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "Accessibility block-screen launch rejected", t);
             return false;
         }
     }
@@ -152,6 +152,11 @@ public class ShieldAccessibilityService extends AccessibilityService {
                                               String title, String message, Runnable onHome) {
         ShieldAccessibilityService svc = instance;
         return svc != null && BlockingOverlay.show(svc, sleepToRise, rise, title, message, onHome);
+    }
+
+    public static boolean showScheduledNightCard(boolean rise, String message, long endMs, Runnable onHome) {
+        ShieldAccessibilityService svc = instance;
+        return svc != null && BlockingOverlay.showScheduledNightCard(svc, rise, message, endMs, onHome);
     }
 
     public static void dismissBlockingOverlay() { BlockingOverlay.hide(); }
@@ -324,18 +329,18 @@ public class ShieldAccessibilityService extends AccessibilityService {
             loopGuard        = new BlockLoopGuard(this);
             timerManager     = new ShieldTimerManager(this);
         } catch (Throwable t) {
-            Log.e(TAG, "Shield init failed", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "Shield init failed", t);
         }
 
-        try { loadAdultKeywordsFromAssets(); } catch (Throwable t) { Log.w(TAG, "keywords", t); }
-        try { loadAdultSitesFromAssets(); }   catch (Throwable t) { Log.w(TAG, "sites", t); }
-        try { loadMonitoredApps(); }          catch (Throwable t) { Log.w(TAG, "monitored", t); }
-        try { refreshResolvedBrowserPackages(); } catch (Throwable t) { Log.w(TAG, "browsers", t); }
-        try { registerPackageAddedReceiver(); } catch (Throwable t) { Log.w(TAG, "receiver", t); }
+        try { loadAdultKeywordsFromAssets(); } catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "keywords", t); }
+        try { loadAdultSitesFromAssets(); }   catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "sites", t); }
+        try { loadMonitoredApps(); }          catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "monitored", t); }
+        try { refreshResolvedBrowserPackages(); } catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "browsers", t); }
+        try { registerPackageAddedReceiver(); } catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "receiver", t); }
         // Service just connected: apply the real state immediately instead of
         // waiting out the throttle window in sync().
         try { com.mylifeos.app.shield.core.ForegroundGuardService.forceSync(this); }
-        catch (Throwable t) { Log.w(TAG, "guard sync", t); }
+        catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "guard sync", t); }
         try { com.mylifeos.app.nighttorise.NightToRiseManager.invalidateSafetyCache(); }
         catch (Throwable ignored) {}
         Log.d(TAG, "🛡️ Shield Connected — keywords: " + adultKeywordsSet.size()
@@ -391,7 +396,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
                 }
             }
         } catch (Throwable t) {
-            Log.w(TAG, "Failed to resolve browser packages", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "Failed to resolve browser packages", t);
         }
     }
 
@@ -408,7 +413,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
         monitoredApps.addAll(getAllBrowserPackages());
         for (String p : CONTENT_SCAN_PACKAGES) monitoredApps.add(p);
         try { telegramConfig = preferences.getTelegramGuardConfig(); }
-        catch (Throwable t) { Log.w(TAG, "telegram config", t); }
+        catch (Throwable t) { com.mylifeos.app.LifeLog.w2(TAG, "telegram config", t); }
         Log.d(TAG, "📱 Monitored apps: " + monitoredApps.size());
     }
 
@@ -429,7 +434,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
             }
             reader.close();
         } catch (IOException e) {
-            Log.e(TAG, "Error loading " + asset, e);
+            com.mylifeos.app.LifeLog.w2(TAG, "Error loading " + asset, e);
         }
     }
 
@@ -445,7 +450,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
             reader.close();
             Log.d(TAG, "✅ Adult sites loaded: " + adultSitesList.size());
         } catch (IOException e) {
-            Log.e(TAG, "Error loading adult sites", e);
+            com.mylifeos.app.LifeLog.w2(TAG, "Error loading adult sites", e);
         }
     }
 
@@ -477,7 +482,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
         }
         if (sharedEnforceEvent) {
             com.mylifeos.app.shield.core.BlockEnforcer.noteForeground(packageName);
-            com.mylifeos.app.shield.core.ForegroundGuardService.sync(this);
+            // com.mylifeos.app.shield.core.ForegroundGuardService.sync(this);
             com.mylifeos.app.shield.core.BlockEnforcer.Result r =
                 com.mylifeos.app.shield.core.BlockEnforcer.enforce(this, packageName, this::leaveBlockedApp);
             if (r.blocked) return;
@@ -491,10 +496,9 @@ public class ShieldAccessibilityService extends AccessibilityService {
         // the guard-service sync above it flooded system_server, whose watchdog
         // then restarts it (indistinguishable from a phone reboot). The signal
         // only carries a package name, so send it on real changes only.
-        if ((type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-            || type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            || type == AccessibilityEvent.TYPE_VIEW_SCROLLED)
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             && allowPureShieldSignal(packageName)) {
+
             try {
                 com.mylifeos.app.shield.vision.PureShieldService svc =
                     com.mylifeos.app.shield.vision.PureShieldService.instance;
@@ -547,7 +551,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
             try {
                 if (timerManager != null && timerManager.enforce(packageName)) return;
             } catch (Throwable t) {
-                Log.w(TAG, "Daily limit enforcement failed", t);
+                com.mylifeos.app.LifeLog.w2(TAG, "Daily limit enforcement failed", t);
             }
         }
 
@@ -558,7 +562,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
         // ==========================================
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && isSystemUI(packageName)) {
             if (preferences.isBlockRecentAppsEnabled() &&
-                (packageName.contains("recents") || packageName.contains("launcher"))) {
+                (packageName.contains("recents") && !packageName.contains("launcher"))) {
                 triggerHomeAction("Recent Apps Blocked!");
                 return;
             }
@@ -615,7 +619,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
                         return;
                     }
                 } catch (Throwable t) {
-                    Log.w(TAG, "Telegram inspect failed", t);
+                    com.mylifeos.app.LifeLog.w2(TAG, "Telegram inspect failed", t);
                 }
             }
         }
@@ -815,6 +819,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
 
         if (hard) {
             Log.d(TAG, "🔞 HARD BLOCK | " + reason + " | pkg: " + packageName);
+            writeDebugLog("HARD_BLOCK", reason, packageName);
             loopGuard.registerTrigger(packageName);
             preferences.incrementBlockedAttempts();
 
@@ -836,6 +841,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
 
         if (loopGuard.shouldSoftBlock(packageName)) {
             Log.d(TAG, "🟡 SOFT BLOCK | " + reason + " | pkg: " + packageName);
+            writeDebugLog("SOFT_BLOCK", reason, packageName);
             loopGuard.registerTrigger(packageName);
             preferences.incrementBlockedAttempts();
             performGlobalAction(GLOBAL_ACTION_BACK);
@@ -861,6 +867,47 @@ public class ShieldAccessibilityService extends AccessibilityService {
         // Neither soft nor hard is allowed right now (cooldown/backoff active) — do nothing,
         // this is intentional: it breaks accidental infinite back-loops.
         Log.d(TAG, "⏸️ Trigger suppressed by BlockLoopGuard | " + reason + " | pkg: " + packageName);
+        writeDebugLog("SUPPRESSED", reason, packageName);
+    }
+
+    // ==========================================
+    // TEMPORARY debug log — remove once the good-group false-positive bug is found.
+    // Appends one line per block decision to a plain text file under this app's own
+    // external files dir, readable with any file manager, no adb/PC needed:
+    //   Android/data/com.mylifeos.app/files/shield_debug.log
+    // Capped at the last 200 lines so it can never grow unbounded.
+    // ==========================================
+    private static final int DEBUG_LOG_MAX_LINES = 200;
+
+    private void writeDebugLog(String kind, String reason, String packageName) {
+        try {
+            java.io.File dir = getExternalFilesDir(null);
+            if (dir == null) return;
+            java.io.File logFile = new java.io.File(dir, "shield_debug.log");
+
+            String line = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(new java.util.Date())
+                + " | " + kind
+                + " | reason: " + reason
+                + " | pkg: " + packageName;
+
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            if (logFile.exists()) {
+                try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(logFile))) {
+                    String l;
+                    while ((l = r.readLine()) != null) lines.add(l);
+                } catch (Throwable ignored) {}
+            }
+            lines.add(line);
+            while (lines.size() > DEBUG_LOG_MAX_LINES) lines.remove(0);
+
+            try (java.io.BufferedWriter w = new java.io.BufferedWriter(new java.io.FileWriter(logFile, false))) {
+                for (String l : lines) { w.write(l); w.newLine(); }
+            }
+        } catch (Throwable t) {
+            // Never let debug logging itself cause a problem for the real blocking logic.
+            com.mylifeos.app.LifeLog.w2(TAG, "writeDebugLog failed", t);
+        }
     }
 
     private void triggerAdultBlock(String reason) {
@@ -878,7 +925,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
         try {
             com.mylifeos.app.shield.core.BlockEnforcer.presentShield(this, intent, null);
         } catch (Throwable t) {
-            Log.w(TAG, "presentShield failed, starting activity", t);
+            com.mylifeos.app.LifeLog.w2(TAG, "presentShield failed, starting activity", t);
             try { startActivity(intent); } catch (Throwable ignored) {}
         }
     }
@@ -952,7 +999,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "clearFocusedInput failed", e);
+            com.mylifeos.app.LifeLog.w2(TAG, "clearFocusedInput failed", e);
         }
     }
 
@@ -1112,6 +1159,7 @@ public class ShieldAccessibilityService extends AccessibilityService {
     }
 
     private void triggerHomeAction(String reason) {
+        if (!com.mylifeos.app.shield.core.GlobalActionGovernor.allow(this, "home")) return;
         performGlobalAction(GLOBAL_ACTION_HOME);
         preferences.incrementBlockedAttempts();
     }
@@ -1125,7 +1173,6 @@ public class ShieldAccessibilityService extends AccessibilityService {
 
     @Override
     public void onInterrupt() {
-        Log.e(TAG, "Shield Accessibility Service Interrupted");
+        com.mylifeos.app.LifeLog.w2(TAG, "Shield Accessibility Service Interrupted");
     }
 }
-

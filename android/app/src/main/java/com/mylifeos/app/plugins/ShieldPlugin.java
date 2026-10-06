@@ -52,17 +52,7 @@ public class ShieldPlugin extends Plugin {
         permissionHelper = new ShieldPermissionHelper(getContext());
 
         // Adult filter — app open হলেই automatically start
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    setPrivateDns();
-                } else {
-                    startAdultFilterVpn();
-                }
-            } catch (Exception e) {
-                Log.e("ShieldPlugin", "Adult filter auto-start failed", e);
-            }
-        }, 2000);
+        /* auto-start DNS disabled for stability */
     }
 
     // ==========================================
@@ -180,6 +170,28 @@ public class ShieldPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void scheduleTimedLock(PluginCall call) {
+        try {
+            JSArray lock = call.getArray("lockApps", new JSArray());
+            JSArray user = call.getArray("userApps", new JSArray());
+            JSArray windows = call.getArray("windows", new JSArray());
+            com.mylifeos.app.shield.core.ShieldLockScheduler.save(getContext(), lock, user, windows,
+                call.getString("sleepMessage", ""), call.getString("riseMessage", ""));
+            JSObject ret = new JSObject();
+            ret.put("active", com.mylifeos.app.shield.core.ShieldLockScheduler.isActive(getContext()));
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Failed to schedule lock", e);
+        }
+    }
+
+    @PluginMethod
+    public void clearTimedLock(PluginCall call) {
+        com.mylifeos.app.shield.core.ShieldLockScheduler.clear(getContext());
+        call.resolve();
+    }
+
+    @PluginMethod
     public void getBlockedSites(PluginCall call) {
         JSObject ret = new JSObject();
         JSArray arr = new JSArray();
@@ -270,7 +282,7 @@ public class ShieldPlugin extends Plugin {
                 getContext(), ShieldDeviceAdminReceiver.class);
 
             if (dpm.isAdminActive(admin)) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                if (false && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     dpm.setGlobalSetting(admin, "private_dns_mode", "hostname");
                     dpm.setGlobalSetting(admin, "private_dns_specifier", "family.cloudflare-dns.com");
                     Log.d("ShieldPlugin", "✅ Private DNS set — Android 10+");

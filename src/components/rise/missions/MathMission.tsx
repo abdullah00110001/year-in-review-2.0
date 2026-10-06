@@ -11,8 +11,7 @@ interface MathMissionProps {
 }
 
 export function MathMission({
-  onComplete,
-  requiredSolves = 3,
+  onCompreturn  requiredSolves = 3,
   perProblemSeconds = 60,
 }: MathMissionProps) {
   const [problem, setProblem] = useState({ question: '', answer: 0 });

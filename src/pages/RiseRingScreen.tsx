@@ -7,6 +7,7 @@ import { ShakeMission }   from '@/components/rise/missions/ShakeMission';
 import { BarcodeMission } from '@/components/rise/missions/BarcodeMission';
 import { PhotoMission }   from '@/components/rise/missions/PhotoMission';
 import { TypingMission }  from '@/components/rise/missions/TypingMission';
+import { StepMission, requiredStepsFor } from '@/components/rise/missions/StepMission';
 import { WakeStatusModal }      from '@/components/rise/WakeStatusModal';
 import { LocationPrivacySheet } from '@/components/rise/LocationPrivacySheet';
 
@@ -44,7 +45,7 @@ interface LocalAlarm {
 }
 
 const PER_PROBLEM_SECONDS: Record<string, number> = { easy: 120, medium: 60, hard: 30 };
-const VALID_MISSIONS = ['math', 'shake', 'qr', 'barcode', 'photo', 'typing'];
+const VALID_MISSIONS = ['math', 'shake', 'qr', 'barcode', 'photo', 'typing', 'steps'];
 
 export default function RiseRingScreen() {
   const { id: rawId } = useParams<{ id: string }>();
@@ -307,6 +308,9 @@ export default function RiseRingScreen() {
         )}
         {missionType === 'typing' && (
           <TypingMission onComplete={handleMissionComplete} phrase={cfg?.typingPhrase || 'I am ready for today'} requiredCount={cfg?.count ?? 1} />
+        )}
+        {missionType === 'steps' && (
+          <StepMission onComplete={handleMissionComplete} requiredSteps={requiredStepsFor(cfg?.count ?? 3, cfg?.difficulty ?? 'medium')} />
         )}
         {(!isValidMission || missionType === 'none') && (
           <div className="flex flex-col h-full items-center justify-center p-6 text-white">

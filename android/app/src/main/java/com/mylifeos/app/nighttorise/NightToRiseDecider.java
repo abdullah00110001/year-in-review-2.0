@@ -46,6 +46,7 @@ public final class NightToRiseDecider {
      * itself must always stay reachable, in every mode.
      */
     private static final String[] SAFE_EXACT = new String[]{
+        "android",
         "com.android.phone",
         "com.android.dialer",
         "com.google.android.dialer",
@@ -57,11 +58,23 @@ public final class NightToRiseDecider {
         "com.sec.android.app.clockpackage",
         "com.android.systemui",
         "com.android.settings",
+        // OPPO / ColorOS equivalents — without these the launcher, status bar
+        // and Settings were treated as blockable, which loops the block screen.
+        "com.coloros.settings",
+        "com.oppo.launcher",
+        "com.coloros.launcher",
+        "com.coloros.safecenter",
+        "com.oppo.safe",
+        "com.coloros.alarmclock",
+        "com.coloros.phonemanager",
     };
 
     private static final String[] SAFE_CONTAINS = new String[]{
         "dialer", "telecom", "emergency", "incallui", "deskclock", "clockpackage", "systemui",
+        "launcher", "inputmethod", "keyboard", "permissioncontroller", "packageinstaller",
+        "settings", "safecenter",
     };
+
 
     public static class Config {
         public boolean enabled;
