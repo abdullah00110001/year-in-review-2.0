@@ -16,6 +16,7 @@ interface NightToRiseNativePlugin {
   consumePendingBreak(): Promise<{ broke: boolean }>;
   getStatus(): Promise<NativeLockStatus>;
   getDiagnostics(): Promise<NativeDiagnostics>;
+  setCardThemes(options: { sleep: string; rise: string }): Promise<void>;
 }
 
 /** Live self-test of the native enforcement chain. */
@@ -71,6 +72,11 @@ export const nightToRiseBridge = {
     if (!isAndroid || nativeDisarmed) return;
     nativeDisarmed = true;
     try { await Plugin.setConfig({ json: JSON.stringify({ ...cfg, enabled: false }) }); } catch { /* plugin gone */ }
+  },
+  /** Saves which picture each native block card shows. Safe to call often. */
+  async setCardThemes(sleep: string, rise: string): Promise<void> {
+    if (!isAndroid) return;
+    try { await Plugin.setCardThemes({ sleep, rise }); } catch { /* older build */ }
   },
   async setRiseAlarm(_epochMillis: number, _days: number[] = []): Promise<void> {
     return;

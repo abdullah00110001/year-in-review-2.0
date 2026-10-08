@@ -61,6 +61,7 @@ export function useNightToRise(riseAlarm?: NextRiseAlarm | null) {
   const writeConfig = useCallback((next: NightToRiseConfig) => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* quota */ }
     void nightToRiseBridge.setConfig(next);
+    void nightToRiseBridge.setCardThemes(next.sleepCardTheme ?? 'default', next.riseCardTheme ?? 'default');
   }, []);
 
   const update = useCallback((patch: Partial<NightToRiseConfig>) => {
@@ -84,7 +85,11 @@ export function useNightToRise(riseAlarm?: NextRiseAlarm | null) {
   }, [writeConfig]);
 
   // Push current config to native once on mount (after restart).
-  useEffect(() => { void nightToRiseBridge.setConfig(config); /* eslint-disable-next-line */ }, []);
+  useEffect(() => {
+    void nightToRiseBridge.setConfig(config);
+    void nightToRiseBridge.setCardThemes(config.sleepCardTheme ?? 'default', config.riseCardTheme ?? 'default');
+    /* eslint-disable-next-line */
+  }, []);
 
   // Keep the native scheduler aware of the next rise-alarm occurrence AND of
   // the weekdays that alarm actually rings on, so Rise Guard never locks the

@@ -69,6 +69,22 @@ public class NightToRisePlugin extends Plugin {
         call.resolve();
     }
 
+    /**
+     * [N2R-CARD] Saves the picture shown on the Sleep and Rise block cards.
+     * Keys: sleep = default|lake|cabin|harbor, rise = default|meadow|peaks.
+     * Unknown keys are stored as "default". Does not touch blocking.
+     */
+    @PluginMethod
+    public void setCardThemes(PluginCall call) {
+        try {
+            NightToRiseBlockCard.saveThemes(getContext(),
+                call.getString("sleep", "default"), call.getString("rise", "default"));
+            call.resolve();
+        } catch (Throwable t) {
+            call.reject("setCardThemes failed: " + t.getMessage());
+        }
+    }
+
     @PluginMethod
     public void consumePendingBreak(PluginCall call) {
         boolean broke = new NightToRisePreferences(getContext()).consumePendingBreak();
