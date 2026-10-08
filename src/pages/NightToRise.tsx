@@ -18,6 +18,7 @@ import {
   PauseCircle, ShieldCheck, Flame, Lock, BarChart3, Settings2, Sun,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { CardArtworkPicker } from '@/components/rise/night-to-rise/CardArtworkPicker';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -387,6 +388,12 @@ export default function NightToRisePage() {
                       </>
                     )}
                   </div>
+                  <CardArtworkPicker
+                    kind="sleep"
+                    value={config.sleepCardTheme}
+                    disabled={strictLocked}
+                    onChange={(v) => update({ sleepCardTheme: v })}
+                  />
                 </div>
               </Section>
 
@@ -431,6 +438,12 @@ export default function NightToRisePage() {
                       onCheckedChange={(v) => update({ showStreakOnBlock: v })}
                     />
                   </div>
+                  <CardArtworkPicker
+                    kind="rise"
+                    value={config.riseCardTheme}
+                    disabled={strictLocked}
+                    onChange={(v) => update({ riseCardTheme: v })}
+                  />
                 </div>
               </Section>
 

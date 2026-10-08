@@ -35,6 +35,38 @@ final class NightToRiseSleepScenes {
 
     static final int COUNT = 4; // 0 default, 1 lake, 2 cabin, 3 harbor
 
+    // ------------------------------------------------------------------
+    // [N2R-SLEEP-CARD] Stable artwork keys saved in preferences.
+    // Index in this array == theme id. Never reorder; only append.
+    // ------------------------------------------------------------------
+    static final String[] KEYS = {"default", "lake", "cabin", "harbor"};
+
+    /** Turns a saved key into a theme id. Unknown/old values -> default (0). */
+    static int themeFromKey(String key) {
+        if (key == null) return NightToRiseBlockCard.THEME_DEFAULT;
+        for (int i = 0; i < KEYS.length; i++) if (KEYS[i].equals(key)) return i;
+        return NightToRiseBlockCard.THEME_DEFAULT;
+    }
+
+    /**
+     * Builds the complete Sleep Guard card: label, moon icon, stat labels,
+     * colours and the chosen picture, on the shared card shell.
+     */
+    static NightToRiseBlockCard.Handles build(android.content.Context ctx, int theme) {
+        final int t = (theme < 0 || theme >= COUNT) ? NightToRiseBlockCard.THEME_DEFAULT : theme;
+        NightToRiseBlockCard.Style st = new NightToRiseBlockCard.Style();
+        st.pillText = "SLEEP GUARD";
+        st.icon = "\u263E";            // ☾
+        st.countdownLabel = "Unlocks in";
+        st.endLabel = "Lock ends";
+        st.accent1 = accent1(t);
+        st.accent2 = accent2(t);
+        st.cardBottom = cardBottom(t);
+        st.fallback = fallback(t);
+        st.scene = (c, w, h) -> draw(c, w, h, t);
+        return NightToRiseBlockCard.buildShell(ctx, st);
+    }
+
     static void draw(Canvas c, int w, int h, int theme) {
         switch (theme) {
             case NightToRiseBlockCard.THEME_LAKE:   sceneLake(c, w, h); break;

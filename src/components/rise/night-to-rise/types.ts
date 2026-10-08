@@ -61,6 +61,10 @@ export interface NightToRiseConfig {
    * attached. Spec default: 10 hours. Mirrored to native preferences.
    */
   safetyCapHours: number;
+  /** Picture on the native Sleep Guard block card (key, see CardArtworkPicker). */
+  sleepCardTheme: string;
+  /** Picture on the native Rise Guard block card. */
+  riseCardTheme: string;
 }
 
 export type SleepGuardEndMode = NightToRiseConfig['sleepGuardEndMode'];
@@ -113,6 +117,8 @@ export const DEFAULT_CONFIG: NightToRiseConfig = {
   sleepGuardEndMode: 'until-alarm',
   sleepGuardDurationMinutes: 180,
   safetyCapHours: 10,
+  sleepCardTheme: 'default',
+  riseCardTheme: 'default',
 };
 
 /** SECTION 4 — strict mode commits the user for 24 hours. */
