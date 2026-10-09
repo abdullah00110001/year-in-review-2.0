@@ -92,8 +92,12 @@ export function useTrustedWakers(groupId: string | undefined, grantorId: string 
           .insert({ group_id: groupId, grantor_id: grantorId, grantee_id: granteeId });
         if (error) throw error;
       }
+      return !current?.has(granteeId);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['trusted-wakers', groupId, grantorId] }),
+    onSuccess: (added) => {
+      toast.success(added ? 'Trusted waker added' : 'Trusted waker removed');
+      qc.invalidateQueries({ queryKey: ['trusted-wakers', groupId, grantorId] });
+    },
     onError: (e: any) => toast.error(e?.message ?? 'Failed'),
   });
 
