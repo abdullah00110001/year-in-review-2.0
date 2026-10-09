@@ -63,6 +63,10 @@ Deno.serve(async (req) => {
         .select('user_id')
         .eq('group_id', body.group_id);
       const recipients = (members ?? []).map((m: any) => m.user_id).filter((id: string) => id !== senderId);
+      // Ring every member's phone (best-effort, parallel)
+      await Promise.allSettled(recipients.map((rid: string) => svc.functions.invoke('send-wake-signal', {
+        body: { target_user_id: rid, sender_user_id: senderId, group_id: body.group_id, signal_type: 'urgent' },
+      })));
       const { data: senderProfile } = await svc.from('profiles').select('full_name').eq('user_id', senderId).maybeSingle();
       return json({ success: true, recipients, sender_name: senderProfile?.full_name ?? 'Someone', kind: 'leader' });
     }
