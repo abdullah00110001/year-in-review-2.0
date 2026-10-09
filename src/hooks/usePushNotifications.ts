@@ -146,7 +146,7 @@ export function usePushNotifications() {
         const { title, body, data } = notification;
 
         // Handle WAKE_UP_CALL — schedule a native alarm 5 seconds out
-        if (data?.type === 'WAKE_UP_CALL' && isNative) {
+        if (false && data?.type === 'WAKE_UP_CALL' && isNative) { // native WakePushService already rings the alarm
           try {
             const wakeUuid = `wakeup-${data.session_id}-${Date.now()}`;
             const numericId = uuidToNumericId(wakeUuid);

@@ -299,5 +299,12 @@
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:theme="@style/AppTheme.SleepToRiseBlock" />
-    </application>
+            <!-- Wake-up call pushes: native handler rings a real alarm -->
+        <service android:name=".rise.receiver.WakePushService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <service android:name="com.capacitorjs.plugins.pushnotifications.MessagingService" tools:node="remove" />
+</application>
 </manifest>
