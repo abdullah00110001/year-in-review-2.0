@@ -8,7 +8,6 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const ANON_KEY     = Deno.env.get('SUPABASE_ANON_KEY') ?? Deno.env.get('SUPABASE_PUBLISHABLE_KEY')!;
-const FCM_KEY      = Deno.env.get('FIREBASE_SERVER_KEY');
 
 const MAX_CALLS_PER_TARGET = 2;
 
@@ -67,7 +66,6 @@ Deno.serve(async (req) => {
     if (insertErr) return json({ error: insertErr.message }, 500);
 
     // Bump received counter on member status (best-effort)
-    await admin.rpc('exec_sql', {}).catch(() => {});
     const { data: existing } = await admin
       .from('group_wake_member_status')
       .select('id, wake_up_calls_received')
@@ -87,46 +85,12 @@ Deno.serve(async (req) => {
     const title = '⏰ Wake Up Call!';
     const messageText = (custom_message && String(custom_message).trim()) || `${senderName} is calling you to wake up`;
 
-    // Push (best-effort)
-    if (FCM_KEY) {
-      const { data: device } = await admin
-        .from('push_subscriptions')
-        .select('endpoint')
-        .eq('user_id', to_user_id)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (device?.endpoint) {
-        try {
-          await fetch('https://fcm.googleapis.com/fcm/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `key=${FCM_KEY}` },
-            body: JSON.stringify({
-              to: device.endpoint,
-              priority: 'high',
-              notification: {
-                title,
-                body: messageText,
-                sound: 'alarm_sound',
-                channel_id: 'rise_alarm_channel_v3',
-                android_channel_id: 'rise_alarm_channel_v3',
-              },
-              data: {
-                type: 'WAKE_UP_CALL',
-                group_id,
-                session_id,
-                from_user_id: callerId,
-                custom_message: messageText,
-                route: '/rise',
-              },
-            }),
-          });
-        } catch (e) {
-          console.error('FCM send error:', e);
-        }
-      }
-    }
+    // Push (best-effort) — FCM v1 via send-wake-signal (rings an alarm on the target phone)
+    try {
+      await admin.functions.invoke('send-wake-signal', {
+        body: { target_user_id: to_user_id, sender_user_id: callerId, group_id, signal_type: 'urgent' },
+      });
+    } catch (e) { console.error('push error', e); }
 
     // In-app notification record (best-effort)
     try {

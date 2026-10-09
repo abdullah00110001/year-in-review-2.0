@@ -65,23 +65,14 @@ async function sendFcm(deviceToken: string, payload: {
 }) {
   const { token, projectId } = await getAccessToken();
   const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
+  // DATA-ONLY high-priority message: Android always delivers it to the app's
+  // native WakePushService (even when the app is killed), which rings a real
+  // Rise alarm. A "notification" block would be swallowed by the system tray.
   const message = {
     message: {
       token: deviceToken,
-      notification: { title: payload.title, body: payload.body },
-      data: payload.data,
-      android: {
-        priority: payload.priority === 'high' ? 'HIGH' : 'NORMAL',
-        notification: {
-          channel_id: 'wakeup_channel',
-          sound: 'default',
-          default_vibrate_timings: true,
-          default_light_settings: true,
-          notification_priority: 'PRIORITY_MAX',
-          visibility: 'PUBLIC',
-        },
-        ttl: '60s',
-      },
+      data: { ...payload.data, title: payload.title, body: payload.body },
+      android: { priority: 'HIGH', ttl: '120s' },
     },
   };
   const res = await fetch(url, {
@@ -126,7 +117,7 @@ Deno.serve(async (req) => {
           const r = await sendFcm(t.token, {
             title: m.title, body: m.body, priority: m.priority,
             data: {
-              type: 'wakeup',
+              type: 'WAKE_UP_CALL',
               senderId: String(sender_user_id),
               senderName,
               groupId: group_id ? String(group_id) : '',

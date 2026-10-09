@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Skeleton } from '@/components/ui/skeleton';
 import { LifeosGroupType, useGroupDetail, useGroupLeaderboard } from '@/hooks/useLifeosGroups';
 import { UnifiedGroupDetail, type UnifiedMember } from './UnifiedGroupDetail';
@@ -39,12 +40,13 @@ export function GroupDetailPage({ groupId, onBack }: Props) {
   const { members: riseMembers } = useRiseGroupLiveData(isRiseGroup ? groupId : undefined);
 
   if (gLoading || !group || lLoading) {
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-[60] bg-background p-4 space-y-3">
         <Skeleton className="h-12 w-full" />
         <Skeleton className="h-32 w-full" />
         <Skeleton className="h-64 w-full" />
-      </div>
+      </div>,
+      document.body,
     );
   }
 
@@ -67,7 +69,9 @@ export function GroupDetailPage({ groupId, onBack }: Props) {
         wake_status: ((m.focus_minutes ?? 0) > 0 ? 'active' : 'pending') as any,
       }));
 
-  return (
+  // Portal to <body>: inside Shield the page sits in an animated (transformed)
+  // container, which made this full-screen view collapse to nothing.
+  return createPortal(
     <div className="fixed inset-0 z-[60] bg-background">
       <UnifiedGroupDetail
         groupId={groupId}
@@ -81,6 +85,7 @@ export function GroupDetailPage({ groupId, onBack }: Props) {
           sendWakeSignal(m.user_id, groupId, 'gentle');
         }}
       />
-    </div>
+    </div>,
+    document.body,
   );
 }

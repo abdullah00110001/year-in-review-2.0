@@ -88,6 +88,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.10.0'
     implementation 'androidx.work:work-runtime:2.10.3'
+    implementation 'com.google.firebase:firebase-messaging:23.3.1'
+    implementation project(':capacitor-push-notifications')
     // TensorFlow Lite — GPU acceleration only (NNAPI removed - not available in 2.14.0)
     implementation 'org.tensorflow:tensorflow-lite:2.14.0'
     implementation 'org.tensorflow:tensorflow-lite-gpu:2.14.0'
@@ -110,11 +112,11 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
-//try {
-//    def servicesJSON = file('google-services.json')
-//    if (servicesJSON.exists()) {
-//        apply plugin: 'com.google.gms.google-services'
-//    }
-//} catch(Exception e) {
-//    logger.info("google-services.json not found")
-//}
+// Firebase (push). Applied only when google-services.json contains this app's
+// applicationId — otherwise the build would fail; push simply stays off.
+def servicesJSON = file('google-services.json')
+if (servicesJSON.exists() && servicesJSON.text.contains('"' + android.defaultConfig.applicationId + '"')) {
+    apply plugin: 'com.google.gms.google-services'
+} else {
+    logger.warn("google-services.json missing or not for " + android.defaultConfig.applicationId + " — push disabled")
+}
