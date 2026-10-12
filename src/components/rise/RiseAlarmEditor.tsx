@@ -602,30 +602,6 @@ export function RiseAlarmEditor({
                     );
                   })}
                 </div>
-                {alarm.verification_type !== 'none' && (
-                  <button
-                    type="button"
-                    onClick={() => setMissionConfigOpen(true)}
-                    className="w-full mt-1 flex items-center justify-between text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <span>
-                      Difficulty: <span className="text-foreground font-semibold capitalize">{alarm.mission_config?.difficulty ?? 'medium'}</span>
-                      {' · '}
-                      Tasks: <span className="text-foreground font-semibold">{alarm.mission_config?.count ?? 3}</span>
-                      {/* ✅ QR/Barcode এর target দেখাও */}
-                      {(alarm.verification_type === 'qr' || alarm.verification_type === 'barcode') &&
-                        alarm.mission_config?.targetBarcode && (
-                          <span className="text-primary"> · "{alarm.mission_config.targetBarcode}"</span>
-                        )}
-                      {/* ✅ Photo এর location দেখাও */}
-                      {alarm.verification_type === 'photo' &&
-                        alarm.mission_config?.photoLocation && (
-                          <span className="text-primary"> · {alarm.mission_config.photoLocation}</span>
-                        )}
-                    </span>
-                    <ChevronRight className="h-3 w-3" />
-                  </button>
-                )}
               </div>
 
               {/* Sound + vibration */}
