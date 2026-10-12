@@ -13,6 +13,9 @@
 - [x] Let users select Sleep and Rise card artwork independently in Sleep to Rise
 
 ## Rise challenge flow
+- [ ] Fix clipped mission artwork and horizontal overflow; give each challenge its own composition
+- [ ] Repair clock selection and editor return/save flow
+- [ ] Redesign the ringing screen using the existing theme
 - [x] Make every challenge setup page scroll on short phones
 - [ ] Make back, controls, preview, and save work consistently
 - [x] Use the real Math, Typing, Shake, Steps, QR/Barcode, and Photo challenge in preview

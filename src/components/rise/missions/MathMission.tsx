@@ -8,12 +8,14 @@ interface MathMissionProps {
   requiredSolves?: number;
   /** Per-problem time limit. Default 60s. Timeout = auto-skip (no credit). */
   perProblemSeconds?: number;
+  difficulty?: 'easy' | 'medium' | 'hard';
 }
 
 export function MathMission({
   onComplete,
   requiredSolves = 3,
   perProblemSeconds = 60,
+  difficulty = 'medium',
 }: MathMissionProps) {
   const [problem, setProblem] = useState({ question: '', answer: 0 });
   const [userInput, setUserInput] = useState('');
@@ -23,12 +25,15 @@ export function MathMission({
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const generateMathProblem = () => {
-    const num1 = Math.floor(Math.random() * 90) + 10;
-    const num2 = Math.floor(Math.random() * 90) + 10;
-    const op = Math.random() < 0.5 ? '+' : '-';
+    const num1 = difficulty === 'easy' ? Math.floor(Math.random() * 9) + 1 : difficulty === 'hard' ? Math.floor(Math.random() * 10) + 2 : Math.floor(Math.random() * 90) + 10;
+    const num2 = difficulty === 'easy' ? Math.floor(Math.random() * 9) + 1 : difficulty === 'hard' ? Math.floor(Math.random() * 10) + 2 : Math.floor(Math.random() * 90) + 10;
+    const op = difficulty === 'hard' ? '×' : difficulty === 'easy' ? '+' : Math.random() < 0.5 ? '+' : '-';
     let answer = 0;
     let question = '';
-    if (op === '+') {
+    if (op === '×') {
+      answer = num1 * num2;
+      question = `${num1} × ${num2}`;
+    } else if (op === '+') {
       answer = num1 + num2;
       question = `${num1} + ${num2}`;
     } else {
@@ -100,16 +105,16 @@ export function MathMission({
   const timerLow = timeLeft <= 10;
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-white p-6">
+    <div className="flex flex-col min-h-full shrink-0 bg-background text-foreground p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6 mt-4">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-indigo-500/20 rounded-2xl">
-            <Calculator className="h-6 w-6 text-indigo-400" />
+          <div className="p-3 bg-primary/20 rounded-2xl">
+            <Calculator className="h-6 w-6 text-primary" />
           </div>
           <h2 className="text-xl font-bold">Math Mission</h2>
         </div>
-        <div className="text-sm font-medium text-indigo-400 bg-indigo-500/10 px-4 py-2 rounded-full border border-indigo-500/20">
+        <div className="text-sm font-medium text-primary bg-primary/10 px-4 py-2 rounded-full border border-primary/20">
           {solvedCount} / {requiredSolves}
         </div>
       </div>
@@ -117,17 +122,17 @@ export function MathMission({
       {/* ⏱ Per-problem timer */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <div className={`flex items-center gap-1.5 text-xs font-semibold ${timerLow ? 'text-rose-400' : 'text-white/60'}`}>
+          <div className={`flex items-center gap-1.5 text-xs font-semibold ${timerLow ? 'text-destructive' : 'text-foreground/60'}`}>
             <Timer className="h-3.5 w-3.5" />
             Time per problem
           </div>
-          <span className={`text-sm font-bold tabular-nums ${timerLow ? 'text-rose-400 animate-pulse' : 'text-white/80'}`}>
+          <span className={`text-sm font-bold tabular-nums ${timerLow ? 'text-destructive animate-pulse' : 'text-foreground/80'}`}>
             {timeLeft}s
           </span>
         </div>
-        <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
+        <div className="h-1.5 w-full bg-muted/10 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full transition-all duration-1000 ease-linear ${timerLow ? 'bg-rose-500' : 'bg-indigo-400'}`}
+            className={`h-full rounded-full transition-all duration-1000 ease-linear ${timerLow ? 'bg-destructive' : 'bg-primary'}`}
             style={{ width: `${timerPct}%` }}
           />
         </div>
@@ -135,16 +140,16 @@ export function MathMission({
 
       {/* Problem + input */}
       <div className="flex-1 flex flex-col items-center justify-center gap-8 mb-8">
-        <div className="text-5xl font-black tracking-wider text-white/90">
+        <div className="text-3xl sm:text-4xl font-black text-foreground/90">
           {problem.question} = ?
         </div>
         <div
-          className={`h-20 w-full max-w-xs flex items-center justify-center text-4xl font-bold rounded-2xl border-2 transition-all ${
+          className={`h-20 w-full max-w-xs break-words flex items-center justify-center text-4xl font-bold rounded-2xl border-2 transition-all ${
             isError
-              ? 'border-rose-500 text-rose-500 bg-rose-500/10 translate-x-1'
+              ? 'border-destructive text-destructive bg-destructive/10 translate-x-1'
               : userInput
-                ? 'border-indigo-500 text-white bg-indigo-500/10'
-                : 'border-white/10 text-white/20 bg-white/5'
+                ? 'border-primary text-foreground bg-primary/10'
+                : 'border-border/10 text-foreground/20 bg-muted/5'
           }`}
         >
           {userInput || 'Tap numbers'}
@@ -152,12 +157,12 @@ export function MathMission({
       </div>
 
       {/* Numpad */}
-      <div className="grid grid-cols-3 gap-4 max-w-sm mx-auto w-full pb-8">
+      <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto w-full pb-8">
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
           <Button
             key={num}
             variant="outline"
-            className="h-16 text-2xl font-semibold bg-white/5 border-white/10 hover:bg-white/10 text-white rounded-2xl"
+            className="h-16 text-2xl font-semibold bg-muted/5 border-border/10 hover:bg-muted/10 text-foreground rounded-2xl"
             onClick={() => handleNumberPress(num.toString())}
           >
             {num}
@@ -166,7 +171,7 @@ export function MathMission({
         <div className="col-start-2">
           <Button
             variant="outline"
-            className="h-16 w-full text-2xl font-semibold bg-white/5 border-white/10 hover:bg-white/10 text-white rounded-2xl"
+            className="h-16 w-full text-2xl font-semibold bg-muted/5 border-border/10 hover:bg-muted/10 text-foreground rounded-2xl"
             onClick={() => handleNumberPress('0')}
           >
             0
@@ -174,7 +179,7 @@ export function MathMission({
         </div>
         <Button
           variant="outline"
-          className="h-16 bg-white/5 border-white/10 hover:bg-rose-500/20 hover:text-rose-400 hover:border-rose-500/30 text-white/60 rounded-2xl"
+          className="h-16 bg-muted/5 border-border/10 hover:bg-destructive/20 hover:text-destructive hover:border-destructive/30 text-foreground/60 rounded-2xl"
           onClick={handleDelete}
         >
           <Delete className="h-6 w-6" />

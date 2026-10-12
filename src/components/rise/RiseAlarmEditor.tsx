@@ -15,7 +15,7 @@ function formatCountdown(diffMs: number): string {
   return `${minutes}m`;
 }
 import { createPortal } from 'react-dom';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -189,6 +189,7 @@ export function RiseAlarmEditor({
   const [permissionsOk, setPermissionsOk]   = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [showRingtonePicker, setShowRingtonePicker] = useState(false);
+  const [pendingMission, setPendingMission] = useState<string | null>(null);
   const [missionConfigOpen, setMissionConfigOpen]   = useState(false);
   const [isSaving, setIsSaving]             = useState(false);
   const [, forceTick] = useState(0);
@@ -505,31 +506,33 @@ export function RiseAlarmEditor({
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onClose}>
+      <Sheet open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
         <SheetContent
           side="bottom"
-          className="h-[100dvh] max-h-[100dvh] w-full p-0 border-0 rounded-none flex flex-col bg-background text-foreground sm:max-w-md sm:mx-auto sm:rounded-t-3xl sm:h-[95vh] sm:max-h-[95vh]"
+          data-rise-editor-host
+          onEscapeKeyDown={(e) => { if (missionConfigOpen || showTimePicker || showRingtonePicker) { e.preventDefault(); setMissionConfigOpen(false); setShowTimePicker(false); setShowRingtonePicker(false); } }}
+          className="h-[100dvh] max-h-[100dvh] w-full p-0 border-0 rounded-none flex flex-col gap-0 [&>button]:hidden data-[state=open]:animate-none transform-none bg-background text-foreground sm:max-w-md sm:mx-auto sm:rounded-t-3xl sm:h-[95vh] sm:max-h-[95vh]"
         >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0 pt-[max(env(safe-area-inset-top),0.75rem)] bg-background/95 backdrop-blur-sm sticky top-0 z-10">
             <Button variant="ghost" size="icon" onClick={onClose} className="rounded-full h-10 w-10">
               <X className="h-5 w-5" />
             </Button>
-            <h2 className="text-base font-bold">{isEditing ? 'Edit Alarm' : 'New Alarm'}</h2>
+            <SheetTitle className="text-base font-bold">{isEditing ? 'Edit Alarm' : 'New Alarm'}</SheetTitle>
             <div className="w-10" />
           </div>
 
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="px-4 py-4 space-y-4 w-full pb-32">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+            <div className="px-4 py-4 space-y-4 w-full pb-6">
 
               {/* Time display */}
               <div className="text-center py-3">
-                <button
+                <Button variant="ghost" aria-label="Choose alarm time"
                   onClick={() => setShowTimePicker(true)}
-                  className="text-5xl font-black tracking-tight tabular-nums text-foreground hover:text-primary transition-colors active:scale-95"
+                  className="h-auto px-2 text-5xl font-black tabular-nums text-foreground hover:text-primary transition-colors active:scale-95"
                 >
                   {formatDisplayTime()}
-                </button>
+                </Button>
                 <p className="text-sm text-primary font-medium mt-1">{getTimeUntil()}</p>
               </div>
 
@@ -569,7 +572,7 @@ export function RiseAlarmEditor({
                     {MISSIONS.find((m) => m.id === alarm.verification_type)?.name}
                   </span>
                 </div>
-                <div className="grid grid-cols-5 gap-1.5">
+                <div className="grid grid-cols-4 gap-2">
                   {MISSIONS.map((m) => {
                     const Icon     = m.icon;
                     const selected = alarm.verification_type === m.id;
@@ -577,18 +580,12 @@ export function RiseAlarmEditor({
                       <button
                         key={m.id}
                         onClick={() => {
-                          // ✅ alarm এর নিজস্ব config আছে কিনা দেখো, না থাকলে global fallback
-                          let cfg: MissionConfig = DEFAULT_MISSION_CONFIG;
-                          try {
-                            const raw = localStorage.getItem(`rise_mission_cfg_${m.id}`);
-                            if (raw) cfg = JSON.parse(raw);
-                          } catch {}
-                          setAlarm((p) => ({
-                            ...p,
-                            verification_type: m.id,
-                            mission_config: m.id === 'none' ? p.mission_config : cfg,
-                          }));
-                          if (m.id !== 'none') setMissionConfigOpen(true);
+                          if (m.id === 'none') {
+                            setAlarm((p) => ({ ...p, verification_type: 'none' }));
+                          } else {
+                            setPendingMission(m.id);
+                            setMissionConfigOpen(true);
+                          }
                         }}
                         className={cn(
                           'flex flex-col items-center gap-1 py-2.5 px-1 rounded-lg transition-all border',
@@ -836,10 +833,10 @@ export function RiseAlarmEditor({
               </div>
 
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Save bar */}
-          <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur-sm px-4 py-3 pb-[max(env(safe-area-inset-top),0.75rem)] sticky bottom-0">
+          <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur-sm px-4 py-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] sticky bottom-0">
             <Button
               onClick={handleSave}
               disabled={isSaving}
@@ -878,14 +875,14 @@ export function RiseAlarmEditor({
 
       {missionConfigOpen && (
         <MissionConfigRouter
-          missionId={alarm.verification_type}
-          value={alarm.mission_config ?? DEFAULT_MISSION_CONFIG}
+          missionId={pendingMission ?? alarm.verification_type}
+          value={pendingMission === alarm.verification_type ? alarm.mission_config ?? DEFAULT_MISSION_CONFIG : DEFAULT_MISSION_CONFIG}
           onSave={(cfg) => {
             try {
               const globalCfg = { difficulty: cfg.difficulty, count: cfg.count };
               localStorage.setItem(`rise_mission_cfg_${alarm.verification_type}`, JSON.stringify(globalCfg));
             } catch {}
-            setAlarm((p) => ({ ...p, mission_config: cfg }));
+            setAlarm((p) => ({ ...p, verification_type: pendingMission ?? p.verification_type, mission_config: cfg }));
             setMissionConfigOpen(false);
           }}
           onClose={() => setMissionConfigOpen(false)}
@@ -931,7 +928,9 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
   const lastVal = useRef<number | null>(null);
 
   const angleFromEvent = (e: React.PointerEvent) => {
-    const r = svgRef.current!.getBoundingClientRect();
+    const svg = svgRef.current;
+    if (!svg) return null;
+    const r = svg.getBoundingClientRect();
     const x = e.clientX - (r.left + r.width / 2);
     const y = e.clientY - (r.top + r.height / 2);
     let deg = (Math.atan2(y, x) * 180) / Math.PI + 90;
@@ -951,21 +950,24 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
   };
 
   const onDown = (e: React.PointerEvent) => {
-    const { deg, dist } = angleFromEvent(e);
+    const point = angleFromEvent(e);
+    if (!point) return;
+    const { deg, dist } = point;
     if (dist < 0.22) return;                 // ignore taps on the centre
     dragging.current = true;
     lastVal.current = null;
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture(e.pointerId);
     apply(deg, false);
   };
   const onMove = (e: React.PointerEvent) => {
     if (!dragging.current) return;
-    apply(angleFromEvent(e).deg, mode === 'minute');
+    const point = angleFromEvent(e);
+    if (point) apply(point.deg, mode === 'minute');
   };
   const onUp = () => {
     if (!dragging.current) return;
     dragging.current = false;
-    if (mode === 'hour') setTimeout(() => setMode('minute'), 180);
+    if (mode === 'hour') setMode('minute');
   };
 
   const handleComplete = () => {
@@ -990,7 +992,7 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className="w-full max-w-md bg-card text-card-foreground border-t border-border rounded-t-3xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-200"
+        className="w-full max-w-md max-h-[100dvh] overflow-y-auto bg-card text-card-foreground border-t border-border rounded-t-3xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-200"
         onClick={(e) => e.stopPropagation()}
         style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0px)' }}
       >
@@ -1014,7 +1016,7 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
           </div>
         </div>
         <p className="text-center text-xs text-muted-foreground mt-1">
-          {mode === 'hour' ? 'Tap or drag to pick the hour' : 'Drag for exact minutes'}
+          {mode === 'hour' ? 'Hour' : 'Minute'}
         </p>
 
         <div className="flex justify-center py-3">
@@ -1025,7 +1027,7 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
             onPointerDown={onDown}
             onPointerMove={onMove}
             onPointerUp={onUp}
-            onPointerCancel={onUp}
+            onPointerCancel={() => { dragging.current = false; }}
           >
             <defs>
               <linearGradient id="rise-dial-grad" x1="0" y1="0" x2="0" y2="1">
@@ -1079,7 +1081,7 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
         </div>
       </div>
     </div>,
-    document.body,
+    document.querySelector('[data-rise-editor-host]') ?? document.body,
   );
 }
 
@@ -1112,7 +1114,7 @@ function RingtoneSheet({ selectedId, onSelect, onClose }: { selectedId?: string;
         </div>
       </div>
     </div>,
-    document.body,
+    document.querySelector('[data-rise-editor-host]') ?? document.body,
   );
 }
 
