@@ -17,3 +17,9 @@
 - [ ] Make back, controls, preview, and save work consistently
 - [x] Use the real Math, Typing, Shake, Steps, QR/Barcode, and Photo challenge in preview
 - [ ] Verify saved challenge settings reach the ringing alarm
+
+## Rise redesign brief
+- [x] Round clock-dial time picker with Life OS mark knob
+- [x] Remove Difficulty/Tasks line from Wake-up Mission card
+- [ ] Rise home redesign — waiting on user's choice of direction
+- [ ] Mission screens: working Preview + distinct visuals for all six
