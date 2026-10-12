@@ -15,7 +15,6 @@ function formatCountdown(diffMs: number): string {
   return `${minutes}m`;
 }
 import { createPortal } from 'react-dom';
-import Picker from 'react-mobile-picker';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -912,87 +911,169 @@ function PresetChip({ active, onClick, children }: { active: boolean; onClick: (
   );
 }
 
-// ─── Wheel Time Picker ────────────────────────────────────────────────────────
+// ─── Clock-dial Time Picker ──────────────────────────────────────────────────
+// A round clock face. Tap/drag the hour, it auto-switches to minutes (5-min
+// steps, drag snaps to 1 min while held). The knob is the Life OS mark —
+// a ring with an upward arrow that always points outward along the hand.
 
-const HOURS   = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
-const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
-const AMPM    = ['AM', 'PM'];
+const DIAL = 280;               // px, viewBox size
+const R_NUM = 104;              // radius of the numbers
+const CX = DIAL / 2;
 
 function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSaveTime: (t: string) => void; onClose: () => void }) {
-  const [h24, m]    = value.split(':').map(Number);
-  const initialAmpm = h24 >= 12 ? 'PM' : 'AM';
-  const initialH12  = h24 % 12 || 12;
+  const [h24, m0] = value.split(':').map(Number);
+  const [hour, setHour] = useState(h24 % 12 || 12);
+  const [minute, setMinute] = useState(m0 || 0);
+  const [ampm, setAmpm] = useState<'AM' | 'PM'>(h24 >= 12 ? 'PM' : 'AM');
+  const [mode, setMode] = useState<'hour' | 'minute'>('hour');
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragging = useRef(false);
+  const lastVal = useRef<number | null>(null);
 
-  const [picked, setPicked] = useState({
-    hour:   String(initialH12).padStart(2, '0'),
-    minute: String(m).padStart(2, '0'),
-    ampm:   initialAmpm,
-  });
+  const angleFromEvent = (e: React.PointerEvent) => {
+    const r = svgRef.current!.getBoundingClientRect();
+    const x = e.clientX - (r.left + r.width / 2);
+    const y = e.clientY - (r.top + r.height / 2);
+    let deg = (Math.atan2(y, x) * 180) / Math.PI + 90;
+    if (deg < 0) deg += 360;
+    return { deg, dist: Math.hypot(x, y) / (r.width / 2) };
+  };
+
+  const apply = (deg: number, fine: boolean) => {
+    if (mode === 'hour') {
+      const h = Math.round(deg / 30) % 12 || 12;
+      if (h !== lastVal.current) { lastVal.current = h; setHour(h); navigator.vibrate?.(4); }
+    } else {
+      const step = fine ? 1 : 5;
+      const mm = (Math.round(deg / (6 * step)) * step) % 60;
+      if (mm !== lastVal.current) { lastVal.current = mm; setMinute(mm); navigator.vibrate?.(3); }
+    }
+  };
+
+  const onDown = (e: React.PointerEvent) => {
+    const { deg, dist } = angleFromEvent(e);
+    if (dist < 0.22) return;                 // ignore taps on the centre
+    dragging.current = true;
+    lastVal.current = null;
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    apply(deg, false);
+  };
+  const onMove = (e: React.PointerEvent) => {
+    if (!dragging.current) return;
+    apply(angleFromEvent(e).deg, mode === 'minute');
+  };
+  const onUp = () => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    if (mode === 'hour') setTimeout(() => setMode('minute'), 180);
+  };
 
   const handleComplete = () => {
-    let h = parseInt(picked.hour, 10) % 12;
-    if (picked.ampm === 'PM') h += 12;
-    onSaveTime(`${String(h).padStart(2, '0')}:${picked.minute}`);
+    let h = hour % 12;
+    if (ampm === 'PM') h += 12;
+    onSaveTime(`${String(h).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
     onClose();
   };
 
+  const selDeg = mode === 'hour' ? (hour % 12) * 30 : minute * 6;
+  const rad = ((selDeg - 90) * Math.PI) / 180;
+  const kx = CX + R_NUM * Math.cos(rad);
+  const ky = CX + R_NUM * Math.sin(rad);
+  const labels = mode === 'hour'
+    ? Array.from({ length: 12 }, (_, i) => ({ v: i === 0 ? 12 : i, deg: i * 30, text: String(i === 0 ? 12 : i) }))
+    : Array.from({ length: 12 }, (_, i) => ({ v: i * 5, deg: i * 30, text: String(i * 5).padStart(2, '0') }));
+  const isSel = (v: number) => (mode === 'hour' ? v === hour : v === minute);
+
   return createPortal(
     <div
-      className="fixed inset-0 z-[99999] flex items-end justify-center bg-black/60 backdrop-blur-sm"
-      style={{ touchAction: 'pan-y', pointerEvents: 'auto' }}
+      className="fixed inset-0 z-[99999] flex items-end justify-center bg-background/70 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
         className="w-full max-w-md bg-card text-card-foreground border-t border-border rounded-t-3xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-200"
         onClick={(e) => e.stopPropagation()}
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0px)', touchAction: 'pan-y' }}
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0px)' }}
       >
-        <div className="flex justify-center pt-3 pb-1">
-          <div className="bg-muted w-10 h-1 rounded-full" />
+        <div className="flex justify-center pt-3 pb-1"><div className="bg-muted w-10 h-1 rounded-full" /></div>
+
+        {/* Live preview — tap hour / minute to switch dial mode */}
+        <div className="flex items-end justify-center gap-1 pt-2">
+          <button onClick={() => setMode('hour')} className={cn('text-5xl font-black tabular-nums rounded-xl px-2 transition-colors', mode === 'hour' ? 'text-primary bg-primary/10' : 'text-foreground')}>
+            {String(hour).padStart(2, '0')}
+          </button>
+          <span className="text-5xl font-black text-muted-foreground pb-0.5">:</span>
+          <button onClick={() => setMode('minute')} className={cn('text-5xl font-black tabular-nums rounded-xl px-2 transition-colors', mode === 'minute' ? 'text-primary bg-primary/10' : 'text-foreground')}>
+            {String(minute).padStart(2, '0')}
+          </button>
+          <div className="ml-2 flex flex-col gap-1 pb-1">
+            {(['AM', 'PM'] as const).map((p) => (
+              <button key={p} onClick={() => setAmpm(p)} className={cn('h-7 w-12 rounded-full text-xs font-bold transition-all', ampm === p ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground')}>
+                {p}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="text-center pt-2 pb-1">
-          <h3 className="text-base font-bold">Pick a time</h3>
-          <p className="text-xs text-muted-foreground">Scroll the wheels</p>
+        <p className="text-center text-xs text-muted-foreground mt-1">
+          {mode === 'hour' ? 'Tap or drag to pick the hour' : 'Drag for exact minutes'}
+        </p>
+
+        <div className="flex justify-center py-3">
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${DIAL} ${DIAL}`}
+            className="w-[min(78vw,300px)] h-auto touch-none select-none"
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+          >
+            <defs>
+              <linearGradient id="rise-dial-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.55" />
+                <stop offset="100%" stopColor="hsl(var(--primary))" />
+              </linearGradient>
+            </defs>
+            {/* face */}
+            <circle cx={CX} cy={CX} r={CX - 4} className="fill-muted/50" />
+            <circle cx={CX} cy={CX} r={CX - 4} fill="none" stroke="url(#rise-dial-grad)" strokeWidth="3" opacity="0.5" />
+            {/* minute ticks */}
+            {Array.from({ length: 60 }, (_, i) => {
+              const a = ((i * 6 - 90) * Math.PI) / 180;
+              const r1 = CX - 12, r2 = i % 5 === 0 ? CX - 20 : CX - 15;
+              return <line key={i} x1={CX + r1 * Math.cos(a)} y1={CX + r1 * Math.sin(a)} x2={CX + r2 * Math.cos(a)} y2={CX + r2 * Math.sin(a)} className="stroke-muted-foreground" strokeOpacity={i % 5 === 0 ? 0.5 : 0.2} strokeWidth="1.5" strokeLinecap="round" />;
+            })}
+            {/* hand */}
+            <line x1={CX} y1={CX} x2={kx} y2={ky} stroke="url(#rise-dial-grad)" strokeWidth="3" strokeLinecap="round" />
+            <circle cx={CX} cy={CX} r="5" className="fill-primary" />
+            {/* numbers */}
+            {labels.map((l) => {
+              const a = ((l.deg - 90) * Math.PI) / 180;
+              const x = CX + R_NUM * Math.cos(a), y = CX + R_NUM * Math.sin(a);
+              return (
+                <text key={l.text} x={x} y={y} textAnchor="middle" dominantBaseline="central"
+                  className={cn('text-[17px] font-bold pointer-events-none transition-colors', isSel(l.v) ? 'fill-primary-foreground' : 'fill-foreground')}>
+                  {l.text}
+                </text>
+              );
+            })}
+            {/* knob — the Life OS mark, arrow pointing outward along the hand */}
+            <g transform={`translate(${kx} ${ky}) rotate(${selDeg})`} className="pointer-events-none" style={{ transition: dragging.current ? 'none' : 'transform 160ms ease-out' }}>
+              <circle r="22" className="fill-primary" />
+              <circle r="22" fill="none" className="stroke-primary-foreground" strokeOpacity="0.35" strokeWidth="2" />
+              {!isSel(mode === 'hour' ? hour : (minute % 5 === 0 ? minute : -1)) || (mode === 'minute' && minute % 5 !== 0) ? (
+                <g className="stroke-primary-foreground" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none">
+                  <path d="M-7 -1 L0 -8 L7 -1" /><path d="M0 -8 L0 7" /><path d="M0 7 L5 7" />
+                </g>
+              ) : null}
+            </g>
+            {/* re-draw selected number on top of knob when it sits on a label */}
+            {labels.filter((l) => isSel(l.v)).map((l) => (
+              <text key={'s' + l.text} x={kx} y={ky} textAnchor="middle" dominantBaseline="central" className="text-[17px] font-black fill-primary-foreground pointer-events-none">{l.text}</text>
+            ))}
+          </svg>
         </div>
-        <div
-          className="relative px-4 py-3 select-none"
-          style={{ touchAction: 'pan-y', WebkitUserSelect: 'none' }}
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e)  => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <div className="pointer-events-none absolute left-4 right-4 top-1/2 -translate-y-1/2 h-10 rounded-xl bg-primary/10 border-y border-primary/20" />
-          <Picker value={picked} onChange={(v) => setPicked(v as typeof picked)} wheelMode="natural" height={200} itemHeight={40}>
-            <Picker.Column name="hour">
-              {HOURS.map((h) => (
-                <Picker.Item key={h} value={h}>
-                  {({ selected }) => (
-                    <span className={cn('tabular-nums transition-all', selected ? 'text-primary text-3xl font-black' : 'text-muted-foreground text-xl font-semibold')}>{h}</span>
-                  )}
-                </Picker.Item>
-              ))}
-            </Picker.Column>
-            <Picker.Column name="minute">
-              {MINUTES.map((m) => (
-                <Picker.Item key={m} value={m}>
-                  {({ selected }) => (
-                    <span className={cn('tabular-nums transition-all', selected ? 'text-primary text-3xl font-black' : 'text-muted-foreground text-xl font-semibold')}>{m}</span>
-                  )}
-                </Picker.Item>
-              ))}
-            </Picker.Column>
-            <Picker.Column name="ampm">
-              {AMPM.map((a) => (
-                <Picker.Item key={a} value={a}>
-                  {({ selected }) => (
-                    <span className={cn('transition-all', selected ? 'text-primary text-2xl font-black' : 'text-muted-foreground text-base font-semibold')}>{a}</span>
-                  )}
-                </Picker.Item>
-              ))}
-            </Picker.Column>
-          </Picker>
-        </div>
-        <div className="px-4 pb-4 pt-2 flex gap-2">
+
+        <div className="px-4 pb-4 pt-1 flex gap-2">
           <Button variant="ghost" onClick={onClose} className="flex-1 h-12 rounded-2xl font-semibold">Cancel</Button>
           <Button onClick={handleComplete} className="flex-1 h-12 rounded-2xl font-bold">Set Time</Button>
         </div>
