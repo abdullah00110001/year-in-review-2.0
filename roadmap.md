@@ -21,5 +21,5 @@
 ## Rise redesign brief
 - [x] Round clock-dial time picker with Life OS mark knob
 - [x] Remove Difficulty/Tasks line from Wake-up Mission card
-- [ ] Rise home redesign — waiting on user's choice of direction
+- [x] Rise home redesign (Promise card)
 - [ ] Mission screens: working Preview + distinct visuals for all six
