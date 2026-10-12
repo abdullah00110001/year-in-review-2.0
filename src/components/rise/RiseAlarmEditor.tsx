@@ -1060,7 +1060,7 @@ function ScrollTimePicker({ value, onSaveTime, onClose }: { value: string; onSav
             <g transform={`translate(${kx} ${ky}) rotate(${selDeg})`} className="pointer-events-none" style={{ transition: dragging.current ? 'none' : 'transform 160ms ease-out' }}>
               <circle r="22" className="fill-primary" />
               <circle r="22" fill="none" className="stroke-primary-foreground" strokeOpacity="0.35" strokeWidth="2" />
-              {!isSel(mode === 'hour' ? hour : (minute % 5 === 0 ? minute : -1)) || (mode === 'minute' && minute % 5 !== 0) ? (
+              {!labels.some((l) => isSel(l.v)) ? (
                 <g className="stroke-primary-foreground" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none">
                   <path d="M-7 -1 L0 -8 L7 -1" /><path d="M0 -8 L0 7" /><path d="M0 7 L5 7" />
                 </g>
