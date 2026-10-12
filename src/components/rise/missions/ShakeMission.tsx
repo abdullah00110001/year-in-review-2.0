@@ -96,23 +96,23 @@ export function ShakeMission({ onComplete, requiredShakes = 30 }: ShakeMissionPr
   const strokeDashoffset = circleCircumference - (progressPercentage / 100) * circleCircumference;
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-white p-6">
+    <div className="flex flex-col min-h-full shrink-0 bg-background text-foreground p-6">
       
       {/* 📱 Header */}
       <div className="flex items-center justify-between mb-10 mt-4">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-cyan-500/20 rounded-2xl">
-            <Activity className="h-6 w-6 text-cyan-400" />
+          <div className="p-3 bg-primary/20 rounded-2xl">
+            <Activity className="h-6 w-6 text-primary" />
           </div>
           <h2 className="text-xl font-bold">Shake Mission</h2>
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center gap-12 text-center">
+      <div className="flex-1 flex flex-col items-center justify-center gap-6 text-center">
         
         <div>
           <h3 className="text-3xl font-black mb-2 tracking-wide">SHAKE IT!</h3>
-          <p className="text-white/50 font-medium">
+          <p className="text-foreground/50 font-medium">
             Shake your phone vigorously to wake up your brain.
           </p>
         </div>
@@ -128,7 +128,7 @@ export function ShakeMission({ onComplete, requiredShakes = 30 }: ShakeMissionPr
               stroke="currentColor"
               strokeWidth="12"
               fill="transparent"
-              className="text-white/5"
+              className="text-foreground/5"
             />
             {/* Progress Circle */}
             <circle
@@ -141,16 +141,16 @@ export function ShakeMission({ onComplete, requiredShakes = 30 }: ShakeMissionPr
               strokeDasharray={circleCircumference}
               strokeDashoffset={strokeDashoffset}
               strokeLinecap="round"
-              className="text-cyan-500 transition-all duration-300 ease-out"
+              className="text-primary transition-all duration-300 ease-out"
             />
           </svg>
           
           <div className="absolute flex flex-col items-center justify-center">
-            <Smartphone className={`h-16 w-16 mb-2 text-white transition-transform ${shakeCount % 2 === 0 ? 'rotate-12' : '-rotate-12'}`} />
-            <span className="text-4xl font-black text-white">
+            <Smartphone className={`h-16 w-16 mb-2 text-foreground transition-transform ${shakeCount % 2 === 0 ? 'rotate-12' : '-rotate-12'}`} />
+            <span className="text-4xl font-black text-foreground">
               {shakeCount}
             </span>
-            <span className="text-xs text-white/40 uppercase font-bold tracking-widest mt-1">
+            <span className="text-xs text-foreground/40 uppercase font-bold tracking-widest mt-1">
               / {requiredShakes}
             </span>
           </div>
@@ -161,7 +161,7 @@ export function ShakeMission({ onComplete, requiredShakes = 30 }: ShakeMissionPr
           <Button 
             onClick={simulateShake}
             variant="outline"
-            className="mt-8 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/10 rounded-xl"
+            className="mt-8 border-primary/50 text-primary hover:bg-primary/10 rounded-xl"
           >
             Simulate Shake (Web Only)
           </Button>

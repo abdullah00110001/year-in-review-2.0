@@ -12,12 +12,14 @@ interface TypingMissionProps {
   onComplete: () => void;
   phrase?: string;
   requiredCount?: number;
+  difficulty?: 'easy' | 'medium' | 'hard';
 }
 
 export function TypingMission({
   onComplete,
   phrase = 'I am ready for today',
   requiredCount = 1,
+  difficulty = 'easy',
 }: TypingMissionProps) {
   const [input,       setInput]       = useState('');
   const [doneCount,   setDoneCount]   = useState(0);
@@ -33,7 +35,8 @@ export function TypingMission({
     setInput(val);
     setIsError(false);
 
-    if (val.toLowerCase() === phrase.toLowerCase()) {
+    if (isSuccess) return;
+    if (difficulty === 'hard' ? val === phrase : val.toLowerCase() === phrase.toLowerCase()) {
       const next = doneCount + 1;
       setDoneCount(next);
       setInput('');
@@ -61,34 +64,34 @@ export function TypingMission({
 
   if (isSuccess) {
     return (
-      <div className="flex flex-col h-full items-center justify-center bg-slate-950 text-white p-6">
-        <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-6 animate-pulse">
-          <Check className="h-12 w-12 text-green-400" />
+      <div className="flex flex-col min-h-full shrink-0 items-center justify-center bg-background text-foreground p-6">
+        <div className="w-24 h-24 rounded-full bg-primary/20 flex items-center justify-center mb-6 animate-pulse">
+          <Check className="h-12 w-12 text-primary" />
         </div>
-        <h2 className="text-2xl font-bold text-green-400">Done! Rise and shine ☀️</h2>
+        <h2 className="text-2xl font-bold text-primary">Done! Rise and shine ☀️</h2>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 text-white">
+    <div className="flex flex-col min-h-full shrink-0 bg-background text-foreground">
 
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 pt-12 pb-6">
-        <div className="p-3 bg-cyan-500/20 rounded-2xl">
-          <Type className="h-6 w-6 text-cyan-400" />
+      <div className="flex items-center gap-3 px-5 pt-5 pb-6">
+        <div className="p-3 bg-primary/20 rounded-2xl">
+          <Type className="h-6 w-6 text-primary" />
         </div>
         <h2 className="text-xl font-bold">Typing Mission</h2>
-        <div className="ml-auto text-sm font-semibold text-cyan-400 bg-cyan-500/10 px-3 py-1.5 rounded-full border border-cyan-500/20">
+        <div className="ml-auto text-sm font-semibold text-primary bg-primary/10 px-3 py-1.5 rounded-full border border-primary/20">
           {doneCount}/{requiredCount}
         </div>
       </div>
 
       {/* Progress bar */}
       <div className="px-5 mb-6">
-        <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+        <div className="h-1.5 bg-muted/10 rounded-full overflow-hidden">
           <div
-            className="h-full bg-cyan-400 rounded-full transition-all duration-500"
+            className="h-full bg-primary rounded-full transition-all duration-500"
             style={{ width: `${progress}%` }}
           />
         </div>
@@ -97,15 +100,15 @@ export function TypingMission({
       <div className="flex-1 flex flex-col items-center justify-center px-6 gap-8">
 
         {/* Phrase to type */}
-        <div className="w-full bg-white/5 rounded-2xl p-6 border border-white/10">
-          <p className="text-white/40 text-xs text-center uppercase tracking-widest mb-3">
+        <div className="w-full bg-muted/5 rounded-2xl p-6 border border-border/10">
+          <p className="text-foreground/40 text-xs text-center uppercase tracking-widest mb-3">
             Type this phrase
           </p>
-          <p className="text-white text-2xl font-bold text-center leading-relaxed">
+          <p className="text-foreground text-2xl font-bold text-center leading-relaxed">
             {phrase}
           </p>
           {remaining > 0 && (
-            <p className="text-white/30 text-xs text-center mt-3">
+            <p className="text-foreground/30 text-xs text-center mt-3">
               {remaining} time{remaining !== 1 ? 's' : ''} remaining
             </p>
           )}
@@ -115,7 +118,7 @@ export function TypingMission({
         <div className="w-full">
           <div className={`
             rounded-2xl border-2 overflow-hidden transition-all duration-150
-            ${isError ? 'border-red-500 bg-red-500/10' : input ? 'border-cyan-400 bg-cyan-500/5' : 'border-white/10 bg-white/5'}
+            ${isError ? 'border-destructive bg-destructive/10' : input ? 'border-primary bg-primary/5' : 'border-border/10 bg-muted/5'}
           `}>
             <input
               ref={inputRef}
@@ -123,7 +126,7 @@ export function TypingMission({
               value={input}
               onChange={handleChange}
               placeholder="Start typing..."
-              className="w-full bg-transparent text-white text-xl font-medium px-5 py-4 outline-none placeholder:text-white/20"
+              className="w-full bg-transparent text-foreground text-xl font-medium px-5 py-4 outline-none placeholder:text-foreground/20"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="none"
@@ -142,7 +145,7 @@ export function TypingMission({
                   <div
                     key={i}
                     className={`h-0.5 flex-1 rounded-full transition-colors ${
-                      !typed ? 'bg-white/10' : correct ? 'bg-cyan-400' : 'bg-red-400'
+                      !typed ? 'bg-muted/10' : correct ? 'bg-primary' : 'bg-destructive'
                     }`}
                   />
                 );
@@ -158,7 +161,7 @@ export function TypingMission({
               <div
                 key={i}
                 className={`w-3 h-3 rounded-full transition-colors ${
-                  i < doneCount ? 'bg-cyan-400' : 'bg-white/10'
+                  i < doneCount ? 'bg-primary' : 'bg-muted/10'
                 }`}
               />
             ))}

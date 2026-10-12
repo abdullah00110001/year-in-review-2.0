@@ -82,44 +82,44 @@ export function StepMission({ onComplete, requiredSteps }: Props) {
   const c = 2 * Math.PI * r;
 
   return (
-    <div className="flex h-full flex-col bg-slate-950 p-6 text-white">
+    <div className="flex min-h-full shrink-0 flex-col bg-background p-6 text-foreground">
       <div className="mt-4 flex items-center gap-3">
-        <div className="rounded-2xl bg-emerald-500/20 p-3">
-          <Footprints className="h-6 w-6 text-emerald-400" />
+        <div className="rounded-2xl bg-primary/20 p-3">
+          <Footprints className="h-6 w-6 text-primary" />
         </div>
         <h2 className="text-xl font-bold">Step Mission</h2>
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-10 text-center">
+      <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
         <div>
           <h3 className="mb-2 text-3xl font-black tracking-wide">GET UP & WALK</h3>
-          <p className="text-white/50">Hold your phone and walk {requiredSteps} steps.</p>
+          <p className="text-foreground/50">Hold your phone and walk {requiredSteps} steps.</p>
         </div>
 
         <div className="relative h-56 w-56">
           <svg className="h-full w-full -rotate-90" viewBox="0 0 200 200">
-            <circle cx="100" cy="100" r={r} stroke="currentColor" strokeWidth="12" fill="none" className="text-white/10" />
+            <circle cx="100" cy="100" r={r} stroke="currentColor" strokeWidth="12" fill="none" className="text-foreground/10" />
             <circle
               cx="100" cy="100" r={r} stroke="currentColor" strokeWidth="12" fill="none" strokeLinecap="round"
-              className="text-emerald-400 transition-all duration-200"
+              className="text-primary transition-all duration-200"
               strokeDasharray={c} strokeDashoffset={c - (pct / 100) * c}
             />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-6xl font-black tabular-nums">{steps}</span>
-            <span className="text-sm text-white/50">/ {requiredSteps} steps</span>
+            <span className="text-sm text-foreground/50">/ {requiredSteps} steps</span>
           </div>
         </div>
 
         {sensorOk === false && (
-          <p className="max-w-xs text-sm text-amber-300">
+          <p className="max-w-xs break-words text-sm text-primary">
             Motion sensor not responding. Keep the app open and walk — or use the button below if your phone has no sensor.
           </p>
         )}
       </div>
 
       {(!isNative || sensorOk === false) && (
-        <Button variant="outline" className="h-12 border-white/20 bg-white/5 text-white" onClick={addStep}>
+        <Button variant="outline" className="h-12 border-border/20 bg-muted/5 text-foreground" onClick={addStep}>
           Count a step manually
         </Button>
       )}
