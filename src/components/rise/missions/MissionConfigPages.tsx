@@ -881,26 +881,11 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
       {/* PREVIEW — full-screen challenge, keyboard opens here only */}
       {previewing && (
         <PreviewShell title="Typing challenge" onExit={exitPreview}>
-          <div className="flex-1 flex flex-col justify-center px-5 pb-[max(env(safe-area-inset-bottom),1rem)]">
-            <p className="text-white/40 text-center text-xs mb-3">{typedCount}/{count} typed</p>
-            <p className="text-white text-3xl font-bold text-center mb-6 leading-snug">{phrase}</p>
-            <input
-              ref={previewRef}
-              placeholder="Type the phrase here..."
-              value={previewInput}
-              onChange={handlePreviewType}
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              className={cn(
-                'w-full rounded-2xl px-4 py-4 text-lg outline-none border-2 transition-colors bg-white/5 text-white',
-                previewDone ? 'border-green-400' : previewInput ? 'border-cyan-400' : 'border-white/10',
-              )}
-            />
-            <p className="text-white/30 text-xs text-center mt-3">
-              {difficulty === 'hard' ? 'Exact capitalisation required' : 'Capitalisation ignored'}
-            </p>
-          </div>
+          <TypingMission
+            phrase={phrase}
+            requiredCount={count}
+            onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); exitPreview(); }}
+          />
         </PreviewShell>
       )}
     </div>
