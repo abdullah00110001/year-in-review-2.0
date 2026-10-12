@@ -8,9 +8,9 @@
 - [ ] Show Sleep to Rise as the lock source in the ongoing notification
 - [ ] Present the existing Java Sleep to Rise card for scheduled blocks, for 10 seconds
 - [ ] Preserve the existing card design and verify the routing
-- [ ] Restore the three-file card structure: main selector, Sleep Guard card, Rise Guard card
-- [ ] Add two editable Java Rise scenes while preserving every existing scene
-- [ ] Let users select Sleep and Rise card artwork independently in Sleep to Rise
+- [x] Restore the three-file card structure: main selector, Sleep Guard card, Rise Guard card
+- [x] Add two editable Java Rise scenes while preserving every existing scene
+- [x] Let users select Sleep and Rise card artwork independently in Sleep to Rise
 
 ## Rise challenge flow
 - [x] Make every challenge setup page scroll on short phones
