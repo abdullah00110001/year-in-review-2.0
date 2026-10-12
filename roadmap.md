@@ -22,4 +22,4 @@
 - [x] Round clock-dial time picker with Life OS mark knob
 - [x] Remove Difficulty/Tasks line from Wake-up Mission card
 - [x] Rise home redesign (Promise card)
-- [ ] Mission screens: working Preview + distinct visuals for all six
+- [x] Mission screens: distinct animated visuals for all six (Preview opens the real challenge)

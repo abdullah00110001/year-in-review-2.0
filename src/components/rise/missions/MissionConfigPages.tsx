@@ -28,6 +28,7 @@ import { BarcodeMission } from '@/components/rise/missions/BarcodeMission';
 import { PhotoMission } from '@/components/rise/missions/PhotoMission';
 import { TypingMission } from '@/components/rise/missions/TypingMission';
 import { StepMission, requiredStepsFor } from '@/components/rise/missions/StepMission';
+import { MissionStage } from '@/components/rise/missions/MissionStage';
 
 /* ─── Types ────────────────────────────────────────────── */
 export type MissionDifficulty = 'easy' | 'medium' | 'hard';
@@ -91,56 +92,69 @@ function ConfigHeader({ title, onBack, onClose }: { title: string; onBack?: () =
   );
 }
 
-// Scroll wheel picker — 1..max
+// Repetitions — a row of rising bars; tap one to set the count.
 function CountPicker({ value, onChange, max = 10, label = 'times' }: { value: number; onChange: (n: number) => void; max?: number; label?: string }) {
-  const step = (n: number) => { void selectionChanged(); onChange(n); };
+  const set = (n: number) => { void selectionChanged(); onChange(Math.min(max, Math.max(1, n))); };
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="rounded-[1.5rem] border border-border bg-card p-4">
+      <div className="mb-3 flex items-end justify-between">
         <div>
-          <p className="text-sm font-semibold">Repetitions</p>
-          <p className="text-xs text-muted-foreground">How many {label} to finish</p>
+          <p className="text-sm font-bold">Rounds</p>
+          <p className="text-xs text-muted-foreground">How many {label} before it stops</p>
         </div>
-        <p className="text-2xl font-black tabular-nums text-primary">{value}</p>
+        <div className="flex items-center gap-1">
+          <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => set(value - 1)} disabled={value <= 1} aria-label="Fewer rounds"><Minus className="h-4 w-4" /></Button>
+          <span className="w-8 text-center text-3xl font-black tabular-nums text-primary">{value}</span>
+          <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => set(value + 1)} disabled={value >= max} aria-label="More rounds"><Plus className="h-4 w-4" /></Button>
+        </div>
       </div>
-      <div className="grid grid-cols-[3rem_1fr_3rem] items-center gap-3">
-        <Button type="button" variant="outline" size="icon" onClick={() => step(Math.max(1, value - 1))} disabled={value <= 1} aria-label="Decrease repetitions">
-          <Minus className="h-5 w-5" />
-        </Button>
-        <div className="h-2 overflow-hidden rounded-full bg-muted">
-          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${(value / max) * 100}%` }} />
-        </div>
-        <Button type="button" variant="outline" size="icon" onClick={() => step(Math.min(max, value + 1))} disabled={value >= max} aria-label="Increase repetitions">
-          <Plus className="h-5 w-5" />
-        </Button>
+      <div className="flex items-end justify-between gap-1" role="radiogroup" aria-label="Rounds">
+        {Array.from({ length: max }, (_, i) => {
+          const n = i + 1, on = n <= value;
+          return (
+            <button key={n} type="button" role="radio" aria-checked={n === value} aria-label={`${n}`} onClick={() => set(n)}
+              className="flex h-11 flex-1 items-end justify-center">
+              <span className={cn('w-full max-w-[22px] rounded-full transition-all duration-200', on ? 'bg-primary' : 'bg-muted')}
+                style={{ height: `${14 + (n / max) * 26}px`, opacity: on ? 0.45 + (n / max) * 0.55 : 1 }} />
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-// Difficulty slider — the only place difficulty is configured (removed from the alarm editor summary)
+// Difficulty — three "intensity" tiles; bars rise like the sun.
+const DIFF_META: Record<MissionDifficulty, { name: string; hint: string; bars: number }> = {
+  easy:   { name: 'Gentle', hint: 'Easy',   bars: 1 },
+  medium: { name: 'Steady', hint: 'Medium', bars: 2 },
+  hard:   { name: 'Fierce', hint: 'Hard',   bars: 3 },
+};
 function DifficultySlider({ value, onChange }: { value: MissionDifficulty; onChange: (d: MissionDifficulty) => void }) {
   const levels: MissionDifficulty[] = ['easy', 'medium', 'hard'];
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="mb-3">
-        <p className="text-sm font-semibold">Difficulty</p>
-        <p className="text-xs text-muted-foreground">Choose how demanding it should be</p>
-      </div>
+    <div className="rounded-[1.5rem] border border-border bg-card p-4">
+      <p className="text-sm font-bold">Intensity</p>
+      <p className="mb-3 text-xs text-muted-foreground">How hard tomorrow-you has to work</p>
       <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">
-        {levels.map((level) => (
-          <Button
-            key={level}
-            type="button"
-            variant={value === level ? 'default' : 'outline'}
-            role="radio"
-            aria-checked={value === level}
-            onClick={() => { void selectionChanged(); onChange(level); }}
-            className="h-11 px-2 capitalize"
-          >
-            {level}
-          </Button>
-        ))}
+        {levels.map((level) => {
+          const m = DIFF_META[level], on = value === level;
+          return (
+            <button key={level} type="button" role="radio" aria-checked={on}
+              onClick={() => { void selectionChanged(); onChange(level); }}
+              className={cn('flex flex-col items-center gap-2 rounded-2xl border-2 px-2 py-3 transition-all active:scale-95',
+                on ? 'border-primary bg-primary/10' : 'border-transparent bg-muted')}>
+              <span className="flex h-7 items-end gap-1">
+                {[1, 2, 3].map((b) => (
+                  <span key={b} className={cn('w-2 rounded-full transition-colors', b <= m.bars ? (on ? 'bg-primary' : 'bg-muted-foreground/60') : 'bg-muted-foreground/20')}
+                    style={{ height: `${b * 8 + 4}px` }} />
+                ))}
+              </span>
+              <span className={cn('text-sm font-black', on ? 'text-primary' : 'text-foreground')}>{m.name}</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{m.hint}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -295,29 +309,22 @@ function MathConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSa
   };
 
   return (
-    <div className="relative flex flex-col h-full bg-[#0E1117]">
+    <div className="relative flex flex-col h-full bg-background">
       <ConfigHeader title="Math" onClose={onClose} />
 
       {/* SETUP — no keypad here, only a static sample of the problem */}
       <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-        <div className="bg-[#1A1D26] rounded-2xl p-6">
-          <div className="flex items-center justify-center gap-2 mb-3">
-            <Calculator className="h-4 w-4 text-cyan-400" />
-            <span className="text-cyan-400 text-xs font-bold uppercase tracking-wider">Example</span>
-          </div>
-          <p className="text-white text-4xl font-black text-center">
-            {problem?.q} = <span className="text-white/25">?</span>
-          </p>
-          <p className="text-white/40 text-sm text-center mt-3">
-            Solve {count} {count === 1 ? 'problem' : 'problems'} to dismiss the alarm
+        <MissionStage kind="math" headline={`Solve ${count} ${count === 1 ? 'problem' : 'problems'}`} sub="Wake the brain up before the body">
+          <p className="text-5xl font-black tabular-nums text-foreground">
+            {problem?.q} <span className="text-primary">=</span> <span className="text-muted-foreground/40">?</span>
           </p>
           <button
             onClick={() => { void lightImpact(); generateProblem(); }}
-            className="mx-auto mt-4 flex items-center gap-2 rounded-full bg-white/8 px-4 py-2 text-white/60 text-xs active:scale-95 transition-transform"
+            className="mt-4 flex items-center gap-2 rounded-full bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground active:scale-95 transition-transform"
           >
             <RefreshCw className="h-3.5 w-3.5" /> New example
           </button>
-        </div>
+        </MissionStage>
 
         <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={10} label="times" />
@@ -348,39 +355,25 @@ function MathConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSa
 function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
   const [difficulty, setDifficulty] = useState<MissionDifficulty>(value.difficulty ?? 'easy');
   const [count, setCount]           = useState(value.count ?? 3);
-  const [shakeDemo, setShakeDemo]   = useState(0);
   const [previewing, setPreviewing] = useState(false);
 
-  // Shake demo animation on interval
-  useEffect(() => {
-    const t = setInterval(() => setShakeDemo(n => (n + 1) % 2), 500);
-    return () => clearInterval(t);
-  }, []);
 
   const requiredShakes = count * (difficulty === 'hard' ? 15 : difficulty === 'easy' ? 5 : 10);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       <ConfigHeader title="Shake" onClose={onClose} />
 
       <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
 
-        {/* Preview */}
-        <div className="bg-[#1A1D26] rounded-2xl p-6 flex flex-col items-center">
-          <Smartphone
-            className="h-20 w-20 text-cyan-400 transition-transform duration-200"
-            style={{ transform: `rotate(${shakeDemo === 0 ? '12deg' : '-12deg'})` }}
-          />
-          <p className="text-white text-lg font-bold mt-4">Shake {requiredShakes} times</p>
-          <p className="text-white/40 text-sm mt-1">Shake your phone vigorously</p>
-        </div>
+        <MissionStage kind="shake" target={requiredShakes} headline={`Shake ${requiredShakes} times`} sub="Hard enough that you cannot do it half-asleep" />
 
         <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
 
-        <div className="bg-white/5 rounded-xl p-3">
-          <p className="text-white/40 text-xs text-center">
-            Total shakes: <span className="text-white font-bold">{requiredShakes}</span>
+        <div className="bg-muted rounded-xl p-3">
+          <p className="text-muted-foreground text-xs text-center">
+            Total shakes: <span className="text-foreground font-bold">{requiredShakes}</span>
           </p>
         </div>
       </div>
@@ -413,19 +406,15 @@ function StepsConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
   const total = count * per;
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       <ConfigHeader title="Steps" onClose={onClose} />
       <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-        <div className="bg-[#1A1D26] rounded-2xl p-6 flex flex-col items-center">
-          <Footprints className="h-20 w-20 text-emerald-400 animate-pulse" />
-          <p className="text-white text-lg font-bold mt-4">Walk {total} steps</p>
-          <p className="text-white/40 text-sm mt-1 text-center">The alarm stops only after you get out of bed and walk.</p>
-        </div>
+        <MissionStage kind="steps" target={total} headline={`Walk ${total} steps`} sub="It only stops once you are out of bed and moving" />
         <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
-        <div className="bg-white/5 rounded-xl p-3">
-          <p className="text-white/40 text-xs text-center">
-            Total steps: <span className="text-white font-bold">{total}</span> · fast shaking is not counted
+        <div className="bg-muted rounded-xl p-3">
+          <p className="text-muted-foreground text-xs text-center">
+            Total steps: <span className="text-foreground font-bold">{total}</span> · fast shaking is not counted
           </p>
         </div>
       </div>
@@ -478,27 +467,26 @@ function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       <ConfigHeader title="QR/Barcode" onClose={onClose} />
 
       <div className={cn(setupScrollerClass, 'flex flex-col items-center gap-5 pt-4')}>
-        <p className="text-white text-2xl font-bold text-center leading-snug">
+        <p className="text-foreground text-2xl font-bold text-center leading-snug">
           Scan a code of a part of{'\n'}your morning routine
         </p>
 
         {/* Example / scanned image */}
-        <div className="w-full max-w-xs rounded-2xl overflow-hidden bg-white/5 aspect-square flex items-center justify-center">
+        <div className="w-full max-w-xs rounded-2xl overflow-hidden bg-muted aspect-square flex items-center justify-center">
           {scanned ? (
             <div className="flex flex-col items-center gap-3 p-6">
-              <Check className="h-16 w-16 text-green-400" />
-              <p className="text-green-400 font-bold text-center break-all">{scanned}</p>
-              <p className="text-white/40 text-xs text-center">Tap Scan to change</p>
+              <Check className="h-16 w-16 text-primary" />
+              <p className="text-primary font-bold text-center break-all">{scanned}</p>
+              <p className="text-muted-foreground text-xs text-center">Tap Scan to change</p>
             </div>
           ) : (
             /* Barcode illustration */
             <div className="flex flex-col items-center gap-3 p-6">
-              <QrCode className="h-24 w-24 text-white/20" />
-              <p className="text-white/40 text-sm text-center">No barcode registered yet</p>
+              <MissionStage kind="qr" headline="No code registered yet" sub="Toothpaste, coffee jar, a sticker by the sink" className="w-full border-0 shadow-none" />
             </div>
           )}
         </div>
@@ -510,11 +498,11 @@ function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave
             placeholder="Type barcode value manually"
             value={scanned}
             onChange={(e) => setScanned(e.target.value)}
-            className="w-full bg-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none border border-white/10 focus:border-cyan-400"
+            className="w-full bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
           />
         )}
 
-        <p className="text-white/40 text-sm text-center px-4">
+        <p className="text-muted-foreground text-sm text-center px-4">
           You'll need to scan this code every morning to dismiss your alarm.
         </p>
       </div>
@@ -611,11 +599,11 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-[#0E1117]">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       <ConfigHeader title="Photo" onClose={onClose} />
 
       <div className={cn(setupScrollerClass, 'flex flex-col items-center gap-4 pt-3')}>
-        <p className="text-white text-2xl font-bold text-center leading-snug">
+        <p className="text-foreground text-2xl font-bold text-center leading-snug">
           Take a photo of a part of{'\n'}your morning routine
         </p>
 
@@ -649,9 +637,8 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
               </div>
             </>
           ) : (
-            <div className="w-full h-full bg-white/5 flex flex-col items-center justify-center gap-3">
-              <Camera className="h-16 w-16 text-white/20" />
-              <p className="text-white/40 text-sm">No photo registered</p>
+            <div className="w-full h-full bg-muted flex flex-col items-center justify-center gap-3">
+              <MissionStage kind="photo" headline="No photo registered" sub="Tap the shutter to capture your spot" className="w-full h-full border-0 shadow-none rounded-none" />
             </div>
           )}
 
@@ -667,16 +654,16 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
 
         {/* Location label */}
         <div className="w-full">
-          <p className="text-white/40 text-xs mb-1.5">Location name (optional)</p>
+          <p className="text-muted-foreground text-xs mb-1.5">Location name (optional)</p>
           <input
             placeholder="e.g. Bathroom sink, Kitchen counter"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
-            className="w-full bg-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none border border-white/10 focus:border-cyan-400"
+            className="w-full bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
           />
         </div>
 
-        <p className="text-white/40 text-sm text-center px-2">
+        <p className="text-muted-foreground text-sm text-center px-2">
           Every morning you'll need to take a photo of this spot to dismiss the alarm.
         </p>
       </div>
@@ -793,18 +780,18 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
 
   if (showPhraseList) {
     return (
-      <div className="flex flex-col h-full bg-[#0E1117]">
+      <div className="flex flex-col h-full bg-background">
         <ConfigHeader title="Select phrase" onBack={() => setShowPhraseList(false)} onClose={onClose} />
         <div className={cn(setupScrollerClass, 'flex flex-col gap-2 pt-3')}>
           {/* Custom */}
           <div className="mb-2">
-            <p className="text-white/40 text-xs mb-1.5">Custom phrase</p>
+            <p className="text-muted-foreground text-xs mb-1.5">Custom phrase</p>
             <div className="flex gap-2">
               <input
                 placeholder="Type your own phrase..."
                 value={customPhrase}
                 onChange={(e) => setCustomPhrase(e.target.value)}
-                className="flex-1 bg-white/10 text-white rounded-xl px-4 py-3 text-sm outline-none border border-white/10 focus:border-cyan-400"
+                className="flex-1 bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
               />
               <button
                 onClick={() => {
@@ -813,20 +800,20 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
                   setPhrase(customPhrase.trim());
                   setShowPhraseList(false);
                 }}
-                className="px-4 py-3 bg-cyan-500 text-black rounded-xl font-bold text-sm active:scale-95 transition-transform"
+                className="px-4 py-3 bg-primary text-primary-foreground rounded-xl font-bold text-sm active:scale-95 transition-transform"
               >
                 Use
               </button>
             </div>
           </div>
-          <p className="text-white/40 text-xs">Or choose a preset</p>
+          <p className="text-muted-foreground text-xs">Or choose a preset</p>
           {PRESET_PHRASES.map((p) => (
             <button
               key={p}
               onClick={() => { void lightImpact(); setPhrase(p); setShowPhraseList(false); }}
               className={cn(
                 'w-full text-left px-4 py-4 rounded-xl text-base font-medium transition-colors active:scale-[0.99]',
-                phrase === p ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'bg-white/5 text-white hover:bg-white/10',
+                phrase === p ? 'bg-primary/15 text-primary border border-primary/40' : 'bg-muted text-foreground hover:bg-muted/70',
               )}
             >
               {p}
@@ -838,33 +825,24 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
   }
 
   return (
-    <div className="relative flex flex-col h-full bg-[#0E1117]">
+    <div className="relative flex flex-col h-full bg-background">
       <ConfigHeader title="Typing" onClose={onClose} />
 
       {/* SETUP — read-only example, no text field so the keyboard stays closed */}
       <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-        <div className="bg-[#1A1D26] rounded-2xl p-5 flex flex-col gap-3">
-          <div className="flex items-center justify-center gap-2">
-            <Type className="h-4 w-4 text-cyan-400" />
-            <span className="bg-cyan-500 text-black text-xs font-bold px-3 py-1.5 rounded-full">Example</span>
-          </div>
-          <p className="text-white text-2xl font-bold text-center">{phrase}</p>
-          <p className="text-white/40 text-sm text-center">
-            Type it {count} {count === 1 ? 'time' : 'times'} to dismiss the alarm
-          </p>
-        </div>
+        <MissionStage kind="typing" headline={phrase} sub={`Type it ${count} ${count === 1 ? 'time' : 'times'} to stop the alarm`} />
 
         <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={5} label="times" />
 
         <button
           onClick={() => { void lightImpact(); setShowPhraseList(true); }}
-          className="w-full flex items-center justify-between bg-white/5 rounded-xl px-4 py-4 active:scale-[0.99] transition-transform"
+          className="w-full flex items-center justify-between bg-muted rounded-xl px-4 py-4 active:scale-[0.99] transition-transform"
         >
-          <span className="text-white font-medium">Select phrase</span>
+          <span className="text-foreground font-medium">Select phrase</span>
           <div className="flex items-center gap-2">
-            <span className="text-cyan-400 text-sm">{PRESET_PHRASES.length} phrases</span>
-            <ChevronRight className="h-4 w-4 text-white/30" />
+            <span className="text-primary text-sm">{PRESET_PHRASES.length} phrases</span>
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
           </div>
         </button>
       </div>
