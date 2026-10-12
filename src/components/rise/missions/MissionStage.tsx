@@ -7,7 +7,7 @@
  * Semantic tokens only, so every theme renders correctly.
  */
 import { useEffect, useState, type ReactNode } from 'react';
-import { motion } from 'framer-motion';
+import { motion, MotionConfig } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 export type MissionKind = 'math' | 'shake' | 'steps' | 'qr' | 'photo' | 'typing';
@@ -69,7 +69,7 @@ function ShakeArt({ target }: { target: number }) {
 function StepsArt({ target }: { target: number }) {
   const n = useDemoCounter(target, 3200);
   return (
-    <div className="relative h-36 w-full max-w-[260px]">
+    <div className="relative h-44 w-full max-w-[260px]">
       <svg viewBox="0 0 260 120" className="absolute inset-0 h-full w-full">
         <path d="M10 110 Q130 -20 250 110" fill="none" className="stroke-muted" strokeWidth="3" strokeDasharray="2 8" strokeLinecap="round" />
       </svg>
@@ -135,11 +135,14 @@ function TypingArt({ phrase }: { phrase: string }) {
   }, [phrase]);
   const shown = phrase.slice(0, Math.min(i, phrase.length));
   return (
-    <p className="min-h-[3.5rem] max-w-[280px] text-center text-2xl font-black leading-tight text-foreground">
+    <div className="w-full border-l-2 border-primary pl-4">
+    <p className="min-h-[3.5rem] break-words text-left text-2xl font-black leading-relaxed text-foreground">
       <span>{shown}</span>
       <span className="text-muted-foreground/40">{phrase.slice(shown.length)}</span>
       <motion.span className="ml-0.5 inline-block h-6 w-0.5 translate-y-1 bg-primary" animate={{ opacity: [1, 0, 1] }} transition={{ duration: 0.9, repeat: Infinity }} />
     </p>
+    <div aria-hidden="true" className="mt-5 flex justify-start gap-1.5">{'RISE'.split('').map((key) => <span key={key} className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-muted text-xs font-bold text-muted-foreground">{key}</span>)}</div>
+    </div>
   );
 }
 
@@ -149,8 +152,8 @@ function MathArt({ children }: { children?: ReactNode }) {
 
 export function MissionStage({ kind, target = 30, headline, sub, children, className }: Props) {
   return (
-    <section className={cn('relative overflow-hidden rounded-[2rem] border border-border bg-card px-5 pb-5 pt-6 shadow-lg', className)}>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-primary/15 via-primary/5 to-transparent" />
+    <MotionConfig reducedMotion="user">
+    <section data-mission-stage={kind} className={cn('relative w-full shrink-0 overflow-hidden px-3 pb-6 pt-6', className)}>
       <div className="relative flex flex-col items-center">
         <div className="flex min-h-[9rem] w-full items-center justify-center">
           {kind === 'shake' && <ShakeArt target={target} />}
@@ -165,6 +168,7 @@ export function MissionStage({ kind, target = 30, headline, sub, children, class
         {kind !== 'math' && children}
       </div>
     </section>
+    </MotionConfig>
   );
 }
 

@@ -60,7 +60,7 @@ export function MissionConfigRouter({ missionId, value, onSave, onClose }: Route
       {missionId === 'typing' && <TypingConfigPage value={value} onSave={onSave} onClose={onClose} />}
       {missionId === 'steps' && <StepsConfigPage value={value} onSave={onSave} onClose={onClose} />}
     </div>,
-    document.body,
+    document.querySelector('[data-rise-editor-host]') ?? document.body,
   );
 }
 
@@ -96,13 +96,13 @@ function ConfigHeader({ title, onBack, onClose }: { title: string; onBack?: () =
 function CountPicker({ value, onChange, max = 10, label = 'times' }: { value: number; onChange: (n: number) => void; max?: number; label?: string }) {
   const set = (n: number) => { void selectionChanged(); onChange(Math.min(max, Math.max(1, n))); };
   return (
-    <div className="rounded-[1.5rem] border border-border bg-card p-4">
+    <div className="shrink-0 border-t border-border py-4">
       <div className="mb-3 flex items-end justify-between">
-        <div>
+        <div className="min-w-0 pr-2">
           <p className="text-sm font-bold">Rounds</p>
           <p className="text-xs text-muted-foreground">How many {label} before it stops</p>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => set(value - 1)} disabled={value <= 1} aria-label="Fewer rounds"><Minus className="h-4 w-4" /></Button>
           <span className="w-8 text-center text-3xl font-black tabular-nums text-primary">{value}</span>
           <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => set(value + 1)} disabled={value >= max} aria-label="More rounds"><Plus className="h-4 w-4" /></Button>
@@ -112,11 +112,11 @@ function CountPicker({ value, onChange, max = 10, label = 'times' }: { value: nu
         {Array.from({ length: max }, (_, i) => {
           const n = i + 1, on = n <= value;
           return (
-            <button key={n} type="button" role="radio" aria-checked={n === value} aria-label={`${n}`} onClick={() => set(n)}
-              className="flex h-11 flex-1 items-end justify-center">
+            <Button variant="ghost" key={n} type="button" role="radio" aria-checked={n === value} aria-label={`${n} rounds`} onClick={() => set(n)}
+              className="flex h-11 min-w-0 flex-1 items-end justify-center rounded-none p-0 hover:bg-transparent">
               <span className={cn('w-full max-w-[22px] rounded-full transition-all duration-200', on ? 'bg-primary' : 'bg-muted')}
                 style={{ height: `${14 + (n / max) * 26}px`, opacity: on ? 0.45 + (n / max) * 0.55 : 1 }} />
-            </button>
+            </Button>
           );
         })}
       </div>
@@ -133,16 +133,16 @@ const DIFF_META: Record<MissionDifficulty, { name: string; hint: string; bars: n
 function DifficultySlider({ value, onChange }: { value: MissionDifficulty; onChange: (d: MissionDifficulty) => void }) {
   const levels: MissionDifficulty[] = ['easy', 'medium', 'hard'];
   return (
-    <div className="rounded-[1.5rem] border border-border bg-card p-4">
+    <div className="shrink-0 border-t border-border py-4">
       <p className="text-sm font-bold">Intensity</p>
       <p className="mb-3 text-xs text-muted-foreground">How hard tomorrow-you has to work</p>
       <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">
         {levels.map((level) => {
           const m = DIFF_META[level], on = value === level;
           return (
-            <button key={level} type="button" role="radio" aria-checked={on}
+            <Button variant="ghost" key={level} type="button" role="radio" aria-checked={on}
               onClick={() => { void selectionChanged(); onChange(level); }}
-              className={cn('flex flex-col items-center gap-2 rounded-2xl border-2 px-2 py-3 transition-all active:scale-95',
+              className={cn('flex h-auto min-w-0 flex-col items-center gap-2 rounded-lg border px-1 py-3 transition-all active:scale-95',
                 on ? 'border-primary bg-primary/10' : 'border-transparent bg-muted')}>
               <span className="flex h-7 items-end gap-1">
                 {[1, 2, 3].map((b) => (
@@ -152,7 +152,7 @@ function DifficultySlider({ value, onChange }: { value: MissionDifficulty; onCha
               </span>
               <span className={cn('text-sm font-black', on ? 'text-primary' : 'text-foreground')}>{m.name}</span>
               <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{m.hint}</span>
-            </button>
+            </Button>
           );
         })}
       </div>
@@ -209,12 +209,12 @@ function PreviewShell({ title, onExit, children }: { title: string; onExit: () =
           <p className="text-xs text-muted-foreground">Alarm preview</p>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
     </div>
   );
 }
 
-const setupScrollerClass = 'min-h-0 flex-1 overflow-y-auto overscroll-y-contain touch-pan-y px-4 pb-6';
+const setupScrollerClass = 'min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y px-5 pb-6';
 
 
 /* ══════════════════════════════════════════════════════════
@@ -337,6 +337,7 @@ function MathConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSa
         <PreviewShell title="Math challenge" onExit={exitPreview}>
           <MathMission
             requiredSolves={count}
+            difficulty={difficulty}
             perProblemSeconds={({ easy: 120, medium: 60, hard: 30 } as Record<string, number>)[difficulty] ?? 60}
             onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); later(exitPreview, 700); }}
           />
@@ -371,7 +372,7 @@ function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
         <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
 
-        <div className="bg-muted rounded-xl p-3">
+        <div className="shrink-0 border-l-2 border-primary px-3 py-2">
           <p className="text-muted-foreground text-xs text-center">
             Total shakes: <span className="text-foreground font-bold">{requiredShakes}</span>
           </p>
@@ -412,7 +413,7 @@ function StepsConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
         <MissionStage kind="steps" target={total} headline={`Walk ${total} steps`} sub="It only stops once you are out of bed and moving" />
         <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
-        <div className="bg-muted rounded-xl p-3">
+        <div className="shrink-0 border-l-2 border-primary px-3 py-2">
           <p className="text-muted-foreground text-xs text-center">
             Total steps: <span className="text-foreground font-bold">{total}</span> · fast shaking is not counted
           </p>
@@ -476,7 +477,7 @@ function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave
         </p>
 
         {/* Example / scanned image */}
-        <div className="w-full max-w-xs rounded-2xl overflow-hidden bg-muted aspect-square flex items-center justify-center">
+        <div className="w-full max-w-xs shrink-0 overflow-hidden flex items-center justify-center">
           {scanned ? (
             <div className="flex flex-col items-center gap-3 p-6">
               <Check className="h-16 w-16 text-primary" />
@@ -609,7 +610,7 @@ function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onS
 
         {/* Photo preview / camera placeholder */}
         <div
-          className="w-full max-w-xs rounded-2xl overflow-hidden relative"
+          className="w-full max-w-xs shrink-0 rounded-lg overflow-hidden relative"
           style={{ aspectRatio: '3/4' }}
         >
           {photoDataUrl ? (
@@ -791,7 +792,7 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
                 placeholder="Type your own phrase..."
                 value={customPhrase}
                 onChange={(e) => setCustomPhrase(e.target.value)}
-                className="flex-1 bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
+                className="min-w-0 flex-1 bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
               />
               <button
                 onClick={() => {
@@ -832,7 +833,6 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
       <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
         <MissionStage kind="typing" headline={phrase} sub={`Type it ${count} ${count === 1 ? 'time' : 'times'} to stop the alarm`} />
 
-        <DifficultySlider value={difficulty} onChange={setDifficulty} />
         <CountPicker value={count} onChange={setCount} max={5} label="times" />
 
         <button
@@ -861,6 +861,7 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
         <PreviewShell title="Typing challenge" onExit={exitPreview}>
           <TypingMission
             phrase={phrase}
+            difficulty={difficulty}
             requiredCount={count}
             onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); exitPreview(); }}
           />
