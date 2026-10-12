@@ -26,7 +26,7 @@ import { toast } from 'sonner';
 import { RiseBottomNav } from '@/components/rise/RiseBottomNav';
 import { RiseHeader } from '@/components/rise/RiseHeader';
 import { RiseAlarmCard } from '@/components/rise/RiseAlarmCard';
-import { NextAlarmRing } from '@/components/rise/NextAlarmRing';
+import { RisePromiseCard } from '@/components/rise/home/RisePromiseCard';
 import { AscentRail, AscentNode } from '@/components/rise/ascent/AscentRail';
 import { ThermalDrift } from '@/components/rise/ascent/ThermalDrift';
 import { missionLabel } from '@/lib/rise/missionLabel';
@@ -496,33 +496,21 @@ export default function RisePage() {
             <div className="rise-os relative">
               <ThermalDrift className="h-[280px]" />
 
-              <AscentRail sweep={railSweep} className="relative">
-                {/* Hero node: the next alarm */}
-                <AscentNode index={0} active={!!nextAlarm}>
-                  <NextAlarmRing
-                    time={nextAlarm?.time ?? null}
-                    countdown={nextAlarm?.countdown ?? null}
-                    progress={nextAlarm?.progress ?? 0}
-                    intention={nextAlarm?.alarm?.intention ?? null}
-                    missionLabel={nextAlarm ? missionLabel(nextAlarm.alarm) : null}
-                  />
-                </AscentNode>
+              <RisePromiseCard
+                time={nextAlarm?.time ?? null}
+                countdown={nextAlarm?.countdown ?? null}
+                intention={nextAlarm?.alarm?.intention ?? null}
+                missionLabel={nextAlarm ? missionLabel(nextAlarm.alarm) : null}
+                onCreate={handleCreateAlarm}
+                onCommit={handleCommit}
+              />
 
-                {alarms.length === 0 ? (
-                  <AscentNode index={1}>
-                    <Card className="border-dashed">
-                      <CardContent className="py-10 text-center">
-                        <Sunrise className="h-12 w-12 mx-auto mb-3 text-muted-foreground/40" />
-                        <h3 className="font-semibold mb-3">What will tomorrow's you thank you for?</h3>
-                        <Button onClick={handleCreateAlarm}>Set tonight's intention</Button>
-                      </CardContent>
-                    </Card>
-                  </AscentNode>
-                ) : (
-                  alarms.map((alarm, i) => (
+              {alarms.length > 0 && (
+                <AscentRail sweep={railSweep} className="relative mt-5">
+                  {alarms.map((alarm, i) => (
                     <AscentNode
                       key={alarm.id}
-                      index={i + 1}
+                      index={i}
                       active={alarm.id === nextAlarm?.alarm?.id}
                       onSwipeUp={!alarm.is_enabled ? () => toggleAlarm(alarm.id, true) : undefined}
                       onSwipeDown={alarm.is_enabled ? () => toggleAlarm(alarm.id, false) : undefined}
@@ -535,19 +523,9 @@ export default function RisePage() {
                         onDuplicate={handleDuplicateAlarm}
                       />
                     </AscentNode>
-                  ))
-                )}
-              </AscentRail>
-
-              {/* horizon: everything above is committed, below is still night */}
-              <div className="rise-horizon mt-5" />
-
-              <Button
-                onClick={handleCommit}
-                className="mt-4 w-full h-12 rounded-full text-base font-semibold"
-              >
-                Commit to tomorrow
-              </Button>
+                  ))}
+                </AscentRail>
+              )}
             </div>
           )}
 
