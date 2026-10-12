@@ -328,36 +328,11 @@ function MathConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSa
       {/* PREVIEW — full-screen challenge with the working keypad */}
       {previewing && (
         <PreviewShell title="Math challenge" onExit={exitPreview}>
-          <div className="flex-1 flex flex-col justify-center px-5 pb-[max(env(safe-area-inset-bottom),1rem)]">
-            <p className="text-white/40 text-center text-xs mb-2">{solved}/{count} solved</p>
-            <p className="text-white text-5xl font-black text-center mb-6">{problem?.q} =</p>
-            <div className={cn(
-              'h-16 rounded-2xl border-2 flex items-center justify-center text-3xl font-bold transition-all',
-              isError ? 'border-red-500 text-red-400 bg-red-500/10' : userInput ? 'border-cyan-400 text-white' : 'border-white/10 text-white/20',
-            )}>
-              {userInput || '?'}
-            </div>
-            <div className="grid grid-cols-3 gap-3 mt-6">
-              {[1,2,3,4,5,6,7,8,9].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => handleKey(String(n))}
-                  className="h-16 rounded-2xl bg-white/8 text-white text-2xl font-semibold active:bg-white/25 active:scale-95 transition-all"
-                >
-                  {n}
-                </button>
-              ))}
-              <button onClick={() => handleKey('⌫')} className="h-16 rounded-2xl bg-white/8 text-white/60 text-lg active:bg-white/25 active:scale-95 transition-all">⌫</button>
-              <button onClick={() => handleKey('0')} className="h-16 rounded-2xl bg-white/8 text-white text-2xl font-semibold active:bg-white/25 active:scale-95 transition-all">0</button>
-              <button
-                onClick={() => { void lightImpact(); generateProblem(); }}
-                aria-label="Skip problem"
-                className="h-16 rounded-2xl bg-white/8 text-white/60 flex items-center justify-center active:bg-white/25 active:scale-95 transition-all"
-              >
-                <RefreshCw className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
+          <MathMission
+            requiredSolves={count}
+            perProblemSeconds={({ easy: 120, medium: 60, hard: 30 } as Record<string, number>)[difficulty] ?? 60}
+            onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); later(exitPreview, 700); }}
+          />
         </PreviewShell>
       )}
     </div>
@@ -906,26 +881,11 @@ function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; on
       {/* PREVIEW — full-screen challenge, keyboard opens here only */}
       {previewing && (
         <PreviewShell title="Typing challenge" onExit={exitPreview}>
-          <div className="flex-1 flex flex-col justify-center px-5 pb-[max(env(safe-area-inset-bottom),1rem)]">
-            <p className="text-white/40 text-center text-xs mb-3">{typedCount}/{count} typed</p>
-            <p className="text-white text-3xl font-bold text-center mb-6 leading-snug">{phrase}</p>
-            <input
-              ref={previewRef}
-              placeholder="Type the phrase here..."
-              value={previewInput}
-              onChange={handlePreviewType}
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              className={cn(
-                'w-full rounded-2xl px-4 py-4 text-lg outline-none border-2 transition-colors bg-white/5 text-white',
-                previewDone ? 'border-green-400' : previewInput ? 'border-cyan-400' : 'border-white/10',
-              )}
-            />
-            <p className="text-white/30 text-xs text-center mt-3">
-              {difficulty === 'hard' ? 'Exact capitalisation required' : 'Capitalisation ignored'}
-            </p>
-          </div>
+          <TypingMission
+            phrase={phrase}
+            requiredCount={count}
+            onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); exitPreview(); }}
+          />
         </PreviewShell>
       )}
     </div>

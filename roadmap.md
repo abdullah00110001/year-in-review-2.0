@@ -13,7 +13,7 @@
 - [ ] Let users select Sleep and Rise card artwork independently in Sleep to Rise
 
 ## Rise challenge flow
-- [ ] Make every challenge setup page scroll on short phones
+- [x] Make every challenge setup page scroll on short phones
 - [ ] Make back, controls, preview, and save work consistently
-- [ ] Use the real Math, Typing, Shake, Steps, QR/Barcode, and Photo challenge in preview
+- [x] Use the real Math, Typing, Shake, Steps, QR/Barcode, and Photo challenge in preview
 - [ ] Verify saved challenge settings reach the ringing alarm
