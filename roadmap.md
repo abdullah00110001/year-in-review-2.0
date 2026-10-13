@@ -13,6 +13,7 @@
 - [x] Let users select Sleep and Rise card artwork independently in Sleep to Rise
 
 ## Rise challenge flow
+- [ ] Plan and implement the mission-page repair/redesign requested on October 13; verify setup, preview, and saved settings
 - [ ] Fix clipped mission artwork and horizontal overflow; give each challenge its own composition
 - [ ] Repair clock selection and editor return/save flow
 - [ ] Redesign the ringing screen using the existing theme
