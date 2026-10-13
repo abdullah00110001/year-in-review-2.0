@@ -1,873 +1,159 @@
-/**
- * MissionConfigPages — Alarmy style mission configuration
- * ─────────────────────────────────────────────────────────
- * প্রতিটা mission এর জন্য আলাদা full-screen config page।
- * Live preview সহ। Generic sheet নেই।
- *
- * Exports:
- *   <MissionConfigRouter> — mission type অনুযায়ী সঠিক page দেখায়
- *
- * Props:
- *   missionId  — 'math' | 'shake' | 'qr' | 'photo' | 'typing'
- *   value      — current MissionConfig
- *   onSave     — (cfg: MissionConfig) => void
- *   onClose    — () => void
- */
-
-import { useState, useEffect, useRef } from 'react';
+/** Mission-specific setup. Preview always mounts the same challenge used by the alarm. */
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, X, Camera, RefreshCw, Check, Calculator, QrCode, Smartphone, Type, Footprints, Minus, Plus, ChevronRight } from 'lucide-react';
+import { ArrowLeft, X, Camera, RefreshCw, Check, Minus, Plus, ChevronRight, Play, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { isNative } from '@/lib/capacitor/platform';
-import { lightImpact, mediumImpact, selectionChanged, successNotification, errorNotification } from '@/lib/capacitor/nativeHaptics';
 import { cn } from '@/lib/utils';
-import { MathMission } from '@/components/rise/missions/MathMission';
-import { ShakeMission } from '@/components/rise/missions/ShakeMission';
-import { BarcodeMission } from '@/components/rise/missions/BarcodeMission';
-import { PhotoMission } from '@/components/rise/missions/PhotoMission';
-import { TypingMission } from '@/components/rise/missions/TypingMission';
-import { StepMission, requiredStepsFor } from '@/components/rise/missions/StepMission';
-import { MissionStage } from '@/components/rise/missions/MissionStage';
+import { MathMission } from './MathMission';
+import { ShakeMission } from './ShakeMission';
+import { BarcodeMission } from './BarcodeMission';
+import { PhotoMission } from './PhotoMission';
+import { TypingMission } from './TypingMission';
+import { StepMission, requiredStepsFor } from './StepMission';
+import { MissionStage, type MissionKind } from './MissionStage';
 
-/* ─── Types ────────────────────────────────────────────── */
 export type MissionDifficulty = 'easy' | 'medium' | 'hard';
-
 export interface MissionConfig {
   difficulty: MissionDifficulty;
   count: number;
   targetBarcode?: string;
   photoLocation?: string;
-  photoDataUrl?: string;   // ← registered reference photo
-  typingPhrase?: string;   // ← phrase to type
+  photoDataUrl?: string;
+  typingPhrase?: string;
+}
+interface Props { missionId: string; value: MissionConfig; onSave: (cfg: MissionConfig) => void; onClose: () => void }
+const titles: Record<MissionKind, string> = { math: 'Math', shake: 'Shake', steps: 'Steps', qr: 'QR / Barcode', photo: 'Photo', typing: 'Typing' };
+const phrases = ['Keep shining', 'I am ready for today', 'Rise and conquer', 'Every morning is a fresh start', 'Bismillah', 'Alhamdulillah for today', 'Make today count', 'I choose to be productive', 'بسم الله الرحمن الرحيم', 'আজকে আমি সেরাটা দেব'];
+const inputClass = 'w-full min-w-0 rounded-lg border border-border bg-muted px-3 py-3 text-sm text-foreground outline-none focus:border-primary';
+
+export function MissionConfigRouter(props: Props) {
+  const alias = props.missionId === 'barcode' ? 'qr' : props.missionId === 'walking' ? 'steps' : props.missionId;
+  if (!(alias in titles)) return null;
+  return createPortal(<MissionSetup key={alias} {...props} kind={alias as MissionKind} />, document.querySelector('[data-rise-editor-host]') ?? document.body);
 }
 
-/* ─── Router ────────────────────────────────────────────── */
-interface RouterProps {
-  missionId: string;
-  value: MissionConfig;
-  onSave: (cfg: MissionConfig) => void;
-  onClose: () => void;
-}
-
-export function MissionConfigRouter({ missionId, value, onSave, onClose }: RouterProps) {
-  return createPortal(
-    <div className="fixed inset-0 z-[99999] flex h-[100dvh] flex-col overflow-hidden overscroll-contain bg-background text-foreground">
-      {missionId === 'math'  && <MathConfigPage    value={value} onSave={onSave} onClose={onClose} />}
-      {missionId === 'shake' && <ShakeConfigPage   value={value} onSave={onSave} onClose={onClose} />}
-      {(missionId === 'qr' || missionId === 'barcode') && <QrConfigPage value={value} onSave={onSave} onClose={onClose} />}
-      {missionId === 'photo' && <PhotoConfigPage   value={value} onSave={onSave} onClose={onClose} />}
-      {missionId === 'typing' && <TypingConfigPage value={value} onSave={onSave} onClose={onClose} />}
-      {missionId === 'steps' && <StepsConfigPage value={value} onSave={onSave} onClose={onClose} />}
-    </div>,
-    document.querySelector('[data-rise-editor-host]') ?? document.body,
-  );
-}
-
-/* ─── Shared primitives ─────────────────────────────────── */
-
-/**
- * Single close/back control only — the previous version rendered an extra `X`
- * on the right which duplicated the left control and confused users.
- */
-function ConfigHeader({ title, onBack, onClose }: { title: string; onBack?: () => void; onClose: () => void }) {
-  const handle = () => { void lightImpact(); (onBack ?? onClose)(); };
-  return (
-    <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-4 py-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={handle}
-        aria-label={onBack ? 'Back' : 'Close'}
-        className="h-10 w-10 rounded-full bg-muted active:scale-95"
-      >
-        {onBack ? <ArrowLeft className="h-5 w-5" /> : <X className="h-5 w-5" />}
-      </Button>
-      <div>
-        <span className="block text-base font-bold">{title}</span>
-        <span className="block text-xs text-muted-foreground">Wake-up challenge</span>
-      </div>
-    </div>
-  );
-}
-
-// Repetitions — a row of rising bars; tap one to set the count.
-function CountPicker({ value, onChange, max = 10, label = 'times' }: { value: number; onChange: (n: number) => void; max?: number; label?: string }) {
-  const set = (n: number) => { void selectionChanged(); onChange(Math.min(max, Math.max(1, n))); };
-  return (
-    <div className="shrink-0 border-t border-border py-4">
-      <div className="mb-3 flex items-end justify-between">
-        <div className="min-w-0 pr-2">
-          <p className="text-sm font-bold">Rounds</p>
-          <p className="text-xs text-muted-foreground">How many {label} before it stops</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => set(value - 1)} disabled={value <= 1} aria-label="Fewer rounds"><Minus className="h-4 w-4" /></Button>
-          <span className="w-8 text-center text-3xl font-black tabular-nums text-primary">{value}</span>
-          <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => set(value + 1)} disabled={value >= max} aria-label="More rounds"><Plus className="h-4 w-4" /></Button>
-        </div>
-      </div>
-      <div className="flex items-end justify-between gap-1" role="radiogroup" aria-label="Rounds">
-        {Array.from({ length: max }, (_, i) => {
-          const n = i + 1, on = n <= value;
-          return (
-            <Button variant="ghost" key={n} type="button" role="radio" aria-checked={n === value} aria-label={`${n} rounds`} onClick={() => set(n)}
-              className="flex h-11 min-w-0 flex-1 items-end justify-center rounded-none p-0 hover:bg-transparent">
-              <span className={cn('w-full max-w-[22px] rounded-full transition-all duration-200', on ? 'bg-primary' : 'bg-muted')}
-                style={{ height: `${14 + (n / max) * 26}px`, opacity: on ? 0.45 + (n / max) * 0.55 : 1 }} />
-            </Button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// Difficulty — three "intensity" tiles; bars rise like the sun.
-const DIFF_META: Record<MissionDifficulty, { name: string; hint: string; bars: number }> = {
-  easy:   { name: 'Gentle', hint: 'Easy',   bars: 1 },
-  medium: { name: 'Steady', hint: 'Medium', bars: 2 },
-  hard:   { name: 'Fierce', hint: 'Hard',   bars: 3 },
-};
-function DifficultySlider({ value, onChange }: { value: MissionDifficulty; onChange: (d: MissionDifficulty) => void }) {
-  const levels: MissionDifficulty[] = ['easy', 'medium', 'hard'];
-  return (
-    <div className="shrink-0 border-t border-border py-4">
-      <p className="text-sm font-bold">Intensity</p>
-      <p className="mb-3 text-xs text-muted-foreground">How hard tomorrow-you has to work</p>
-      <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">
-        {levels.map((level) => {
-          const m = DIFF_META[level], on = value === level;
-          return (
-            <Button variant="ghost" key={level} type="button" role="radio" aria-checked={on}
-              onClick={() => { void selectionChanged(); onChange(level); }}
-              className={cn('flex h-auto min-w-0 flex-col items-center gap-2 rounded-lg border px-1 py-3 transition-all active:scale-95',
-                on ? 'border-primary bg-primary/10' : 'border-transparent bg-muted')}>
-              <span className="flex h-7 items-end gap-1">
-                {[1, 2, 3].map((b) => (
-                  <span key={b} className={cn('w-2 rounded-full transition-colors', b <= m.bars ? (on ? 'bg-primary' : 'bg-muted-foreground/60') : 'bg-muted-foreground/20')}
-                    style={{ height: `${b * 8 + 4}px` }} />
-                ))}
-              </span>
-              <span className={cn('text-sm font-black', on ? 'text-primary' : 'text-foreground')}>{m.name}</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{m.hint}</span>
-            </Button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// Bottom action buttons
-function ActionButtons({ onPreview, onComplete, previewLabel = 'Preview' }: { onPreview?: () => void; onComplete: () => void; previewLabel?: string }) {
-  return (
-    <div className="flex shrink-0 gap-3 border-t border-border bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 backdrop-blur-sm">
-      {onPreview && (
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => { void lightImpact(); onPreview(); }}
-          className="h-12 flex-1 font-bold"
-        >
-          {previewLabel}
-        </Button>
-      )}
-      <Button
-        type="button"
-        onClick={() => { void mediumImpact(); onComplete(); }}
-        className="h-12 flex-1 font-bold"
-      >
-        Save
-      </Button>
-    </div>
-  );
-}
-
-/**
- * Full-screen mission PREVIEW — this is the only place a keypad / typing input
- * is shown. The setup screens stay clean (no live keyboard), matching the real
- * alarm-ring experience.
- */
-function PreviewShell({ title, onExit, children }: { title: string; onExit: () => void; children: React.ReactNode }) {
-  return (
-    <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden bg-background">
-      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-4 py-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={() => { void lightImpact(); onExit(); }}
-          aria-label="Exit preview"
-          className="h-10 w-10 rounded-full bg-muted"
-        >
-          <X className="h-5 w-5" />
-        </Button>
-        <div>
-          <p className="text-base font-bold leading-tight">{title}</p>
-          <p className="text-xs text-muted-foreground">Alarm preview</p>
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
-    </div>
-  );
-}
-
-const setupScrollerClass = 'min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y px-5 pb-6';
-
-
-/* ══════════════════════════════════════════════════════════
-   1. MATH CONFIG
-   ══════════════════════════════════════════════════════════ */
-
-function MathConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
-  const [difficulty, setDifficulty] = useState<MissionDifficulty>(value.difficulty ?? 'easy');
-  const [count, setCount]           = useState(value.count ?? 1);
-  const [problem, setProblem]       = useState<{ q: string; a: number } | null>(null);
-  const [userInput, setUserInput]   = useState('');
-  const [isError, setIsError]       = useState(false);
-  const [previewing, setPreviewing] = useState(false);
-  const [solved, setSolved]         = useState(0);
-  const timers                       = useRef<number[]>([]);
-
-  const later = (fn: () => void, ms: number) => {
-    const id = window.setTimeout(fn, ms);
-    timers.current.push(id);
-  };
-
-  useEffect(() => () => { timers.current.forEach(clearTimeout); timers.current = []; }, []);
-
-  const generateProblem = () => {
-    let a: number, b: number, q: string, ans: number;
-    if (difficulty === 'easy') {
-      a = Math.floor(Math.random() * 9) + 1;
-      b = Math.floor(Math.random() * 9) + 1;
-      q = `${a}+${b}`; ans = a + b;
-    } else if (difficulty === 'medium') {
-      a = Math.floor(Math.random() * 50) + 10;
-      b = Math.floor(Math.random() * 50) + 10;
-      const op = Math.random() > 0.5;
-      q = op ? `${a}+${b}` : `${Math.max(a,b)}-${Math.min(a,b)}`;
-      ans = op ? a + b : Math.abs(a - b);
-    } else {
-      a = Math.floor(Math.random() * 9) + 2;
-      b = Math.floor(Math.random() * 9) + 2;
-      q = `${a}×${b}`; ans = a * b;
-    }
-    setProblem({ q, a: ans });
-    setUserInput('');
-    setIsError(false);
-  };
-
-  // Regenerate the sample problem whenever the difficulty changes.
-  useEffect(() => { generateProblem(); /* eslint-disable-next-line */ }, [difficulty]);
-
-  const startPreview = () => {
-    setSolved(0);
-    generateProblem();
-    setPreviewing(true);
-  };
-
-  const exitPreview = () => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-    setPreviewing(false);
-    setUserInput('');
-    setSolved(0);
-  };
-
-  const handleKey = (k: string) => {
-    if (!problem) return;
-    void lightImpact();
-    if (k === '⌫') { setUserInput((p) => p.slice(0, -1)); return; }
-    const next = userInput + k;
-    setUserInput(next);
-    const expected = problem.a.toString();
-    if (next === expected) {
-      void successNotification();
-      const done = solved + 1;
-      setSolved(done);
-      if (done >= count) {
-        toast.success('Preview complete — alarm would dismiss ✓');
-        later(exitPreview, 700);
-      } else {
-        toast.success(`Correct! ${done}/${count}`);
-        later(generateProblem, 400);
-      }
-    } else if (next.length >= expected.length) {
-      void errorNotification();
-      setIsError(true);
-      later(() => { setIsError(false); setUserInput(''); }, 500);
-    }
-  };
-
-  const handleComplete = () => {
-    onSave({ ...value, difficulty, count });
-    toast.success('Math mission configured ✓');
-    onClose();
-  };
-
-  return (
-    <div className="relative flex flex-col h-full bg-background">
-      <ConfigHeader title="Math" onClose={onClose} />
-
-      {/* SETUP — no keypad here, only a static sample of the problem */}
-      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-        <MissionStage kind="math" headline={`Solve ${count} ${count === 1 ? 'problem' : 'problems'}`} sub="Wake the brain up before the body">
-          <p className="text-5xl font-black tabular-nums text-foreground">
-            {problem?.q} <span className="text-primary">=</span> <span className="text-muted-foreground/40">?</span>
-          </p>
-          <button
-            onClick={() => { void lightImpact(); generateProblem(); }}
-            className="mt-4 flex items-center gap-2 rounded-full bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground active:scale-95 transition-transform"
-          >
-            <RefreshCw className="h-3.5 w-3.5" /> New example
-          </button>
-        </MissionStage>
-
-        <DifficultySlider value={difficulty} onChange={setDifficulty} />
-        <CountPicker value={count} onChange={setCount} max={10} label="times" />
-      </div>
-
-      <ActionButtons onPreview={startPreview} onComplete={handleComplete} />
-
-      {/* PREVIEW — full-screen challenge with the working keypad */}
-      {previewing && (
-        <PreviewShell title="Math challenge" onExit={exitPreview}>
-          <MathMission
-            requiredSolves={count}
-            difficulty={difficulty}
-            perProblemSeconds={({ easy: 120, medium: 60, hard: 30 } as Record<string, number>)[difficulty] ?? 60}
-            onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); later(exitPreview, 700); }}
-          />
-        </PreviewShell>
-      )}
-    </div>
-  );
-}
-
-
-
-/* ══════════════════════════════════════════════════════════
-   2. SHAKE CONFIG
-   ══════════════════════════════════════════════════════════ */
-
-function ShakeConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
-  const [difficulty, setDifficulty] = useState<MissionDifficulty>(value.difficulty ?? 'easy');
-  const [count, setCount]           = useState(value.count ?? 3);
-  const [previewing, setPreviewing] = useState(false);
-
-
-  const requiredShakes = count * (difficulty === 'hard' ? 15 : difficulty === 'easy' ? 5 : 10);
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col bg-background">
-      <ConfigHeader title="Shake" onClose={onClose} />
-
-      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-
-        <MissionStage kind="shake" target={requiredShakes} headline={`Shake ${requiredShakes} times`} sub="Hard enough that you cannot do it half-asleep" />
-
-        <DifficultySlider value={difficulty} onChange={setDifficulty} />
-        <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
-
-        <div className="shrink-0 border-l-2 border-primary px-3 py-2">
-          <p className="text-muted-foreground text-xs text-center">
-            Total shakes: <span className="text-foreground font-bold">{requiredShakes}</span>
-          </p>
-        </div>
-      </div>
-
-      <ActionButtons
-        onPreview={() => setPreviewing(true)}
-        onComplete={() => { onSave({ ...value, difficulty, count }); toast.success('Shake mission configured ✓'); onClose(); }}
-      />
-      {previewing && (
-        <PreviewShell title="Shake challenge" onExit={() => setPreviewing(false)}>
-          <ShakeMission requiredShakes={requiredShakes} onComplete={() => {
-            toast.success('Preview complete — alarm would dismiss ✓');
-            setPreviewing(false);
-          }} />
-        </PreviewShell>
-      )}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   2b. STEPS CONFIG — walk to dismiss
-   ══════════════════════════════════════════════════════════ */
-
-function StepsConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
-  const [difficulty, setDifficulty] = useState<MissionDifficulty>(value.difficulty ?? 'medium');
-  const [count, setCount]           = useState(value.count ?? 3);
-  const [previewing, setPreviewing] = useState(false);
-  const per = difficulty === 'hard' ? 40 : difficulty === 'easy' ? 10 : 20;
-  const total = count * per;
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col bg-background">
-      <ConfigHeader title="Steps" onClose={onClose} />
-      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-        <MissionStage kind="steps" target={total} headline={`Walk ${total} steps`} sub="It only stops once you are out of bed and moving" />
-        <DifficultySlider value={difficulty} onChange={setDifficulty} />
-        <CountPicker value={count} onChange={setCount} max={10} label="rounds" />
-        <div className="shrink-0 border-l-2 border-primary px-3 py-2">
-          <p className="text-muted-foreground text-xs text-center">
-            Total steps: <span className="text-foreground font-bold">{total}</span> · fast shaking is not counted
-          </p>
-        </div>
-      </div>
-      <ActionButtons
-        onPreview={() => setPreviewing(true)}
-        onComplete={() => { onSave({ ...value, difficulty, count }); toast.success('Step mission configured ✓'); onClose(); }}
-      />
-      {previewing && (
-        <PreviewShell title="Steps challenge" onExit={() => setPreviewing(false)}>
-          <StepMission requiredSteps={total} onComplete={() => {
-            toast.success('Preview complete — alarm would dismiss ✓');
-            setPreviewing(false);
-          }} />
-        </PreviewShell>
-      )}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   3. QR / BARCODE CONFIG
-   ══════════════════════════════════════════════════════════ */
-
-function QrConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
-  const [scanned, setScanned]           = useState(value.targetBarcode ?? '');
-  const [isScanning, setIsScanning]     = useState(false);
-  const [previewing, setPreviewing]     = useState(false);
-  const manualRef                        = useRef<HTMLInputElement>(null);
-
-  const doScan = async () => {
-    setIsScanning(true);
-    try {
-      if (isNative) {
-        const { scanBarcode } = await import('@/lib/capacitor/barcodeScannerBridge');
-        const result = await scanBarcode('');
-        if (result.success && result.value) {
-          setScanned(result.value);
-          toast.success(`Registered: ${result.value}`);
-        }
-      } else {
-        // Web fallback — manual input
-        manualRef.current?.focus();
-        toast.info('Enter barcode manually below (web mode)');
-      }
-    } catch (e) {
-      toast.error('Scan failed');
-    } finally {
-      setIsScanning(false);
-    }
-  };
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col bg-background">
-      <ConfigHeader title="QR/Barcode" onClose={onClose} />
-
-      <div className={cn(setupScrollerClass, 'flex flex-col items-center gap-5 pt-4')}>
-        <p className="text-foreground text-2xl font-bold text-center leading-snug">
-          Scan a code of a part of{'\n'}your morning routine
-        </p>
-
-        {/* Example / scanned image */}
-        <div className="w-full max-w-xs shrink-0 overflow-hidden flex items-center justify-center">
-          {scanned ? (
-            <div className="flex flex-col items-center gap-3 p-6">
-              <Check className="h-16 w-16 text-primary" />
-              <p className="text-primary font-bold text-center break-all">{scanned}</p>
-              <p className="text-muted-foreground text-xs text-center">Tap Scan to change</p>
-            </div>
-          ) : (
-            /* Barcode illustration */
-            <div className="flex flex-col items-center gap-3 p-6">
-              <MissionStage kind="qr" headline="No code registered yet" sub="Toothpaste, coffee jar, a sticker by the sink" className="w-full border-0 shadow-none" />
-            </div>
-          )}
-        </div>
-
-        {/* Manual input for web */}
-        {!isNative && (
-          <input
-            ref={manualRef}
-            placeholder="Type barcode value manually"
-            value={scanned}
-            onChange={(e) => setScanned(e.target.value)}
-            className="w-full bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
-          />
-        )}
-
-        <p className="text-muted-foreground text-sm text-center px-4">
-          You'll need to scan this code every morning to dismiss your alarm.
-        </p>
-      </div>
-
-      <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-border bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 backdrop-blur-sm">
-        <Button
-          type="button"
-          onClick={doScan}
-          disabled={isScanning}
-          variant="outline"
-          className="h-12 font-bold"
-        >
-          {isScanning ? 'Opening scanner...' : scanned ? 'Re-scan' : 'Scan'}
-        </Button>
-        <Button
-          type="button"
-          onClick={() => {
-            if (!scanned) { toast.error('Register a QR code or barcode first'); return; }
-            setPreviewing(true);
-          }}
-          variant="outline"
-          className="h-12 font-bold"
-        >
-          Preview
-        </Button>
-        <Button
-          type="button"
-          onClick={() => {
-            if (!scanned.trim()) { toast.error('Please register a barcode first'); return; }
-            onSave({ ...value, targetBarcode: scanned.trim() });
-            toast.success('QR/Barcode mission configured ✓');
-            onClose();
-          }}
-          className="col-span-2 h-12 font-bold"
-        >
-          Save
-        </Button>
-      </div>
-      {previewing && (
-        <PreviewShell title="QR/Barcode challenge" onExit={() => setPreviewing(false)}>
-          <BarcodeMission targetBarcode={scanned} onComplete={() => {
-            toast.success('Preview complete — alarm would dismiss ✓');
-            setPreviewing(false);
-          }} />
-        </PreviewShell>
-      )}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   4. PHOTO CONFIG
-   ══════════════════════════════════════════════════════════ */
-
-function PhotoConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
-  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(value.photoDataUrl ?? null);
-  const [location,     setLocation]     = useState(value.photoLocation ?? '');
-  const [capturing,    setCapturing]    = useState(false);
-  const [previewing,   setPreviewing]   = useState(false);
-  const fileRef                          = useRef<HTMLInputElement>(null);
-
-  const takePhoto = async () => {
-    if (capturing) return;
-    setCapturing(true);
-    try {
-      if (isNative) {
-        const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
-        const photo = await Camera.getPhoto({
-          quality:      70,
-          resultType:   CameraResultType.DataUrl,
-          source:       CameraSource.Camera,
-          allowEditing: false,
-          saveToGallery: false,
-        });
-        if (photo.dataUrl) setPhotoDataUrl(photo.dataUrl);
-      } else {
-        fileRef.current?.click();
-      }
-    } catch (e: any) {
-      const msg = String(e?.message || '');
-      if (!/cancel/i.test(msg)) toast.error('Camera failed');
-    } finally {
-      setCapturing(false);
-    }
-  };
-
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setPhotoDataUrl(reader.result as string);
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col bg-background">
-      <ConfigHeader title="Photo" onClose={onClose} />
-
-      <div className={cn(setupScrollerClass, 'flex flex-col items-center gap-4 pt-3')}>
-        <p className="text-foreground text-2xl font-bold text-center leading-snug">
-          Take a photo of a part of{'\n'}your morning routine
-        </p>
-
-        {/* Photo preview / camera placeholder */}
-        <div
-          className="w-full max-w-xs shrink-0 rounded-lg overflow-hidden relative"
-          style={{ aspectRatio: '3/4' }}
-        >
-          {photoDataUrl ? (
-            <>
-              <img src={photoDataUrl} alt="Reference" className="w-full h-full object-cover" />
-              {/* Viewfinder overlay */}
-              <div className="absolute inset-0 flex items-start justify-start p-3">
-                <div className="w-5 h-5 border-t-2 border-l-2 border-white rounded-tl" />
-              </div>
-              <div className="absolute inset-0 flex items-start justify-end p-3">
-                <div className="w-5 h-5 border-t-2 border-r-2 border-white rounded-tr" />
-              </div>
-              <div className="absolute inset-0 flex items-end justify-start p-3">
-                <div className="w-5 h-5 border-b-2 border-l-2 border-white rounded-bl" />
-              </div>
-              <div className="absolute inset-0 flex items-end justify-end p-3">
-                <div className="w-5 h-5 border-b-2 border-r-2 border-white rounded-br" />
-              </div>
-              {/* Crosshair */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-4 h-4 relative">
-                  <div className="absolute inset-x-0 top-1/2 h-0.5 bg-white/60" />
-                  <div className="absolute inset-y-0 left-1/2 w-0.5 bg-white/60" />
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="w-full h-full bg-muted flex flex-col items-center justify-center gap-3">
-              <MissionStage kind="photo" headline="No photo registered" sub="Tap the shutter to capture your spot" className="w-full h-full border-0 shadow-none rounded-none" />
-            </div>
-          )}
-
-          {/* Shutter button overlay */}
-          <button
-            onClick={takePhoto}
-            disabled={capturing}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 w-14 h-14 rounded-full border-4 border-white flex items-center justify-center disabled:opacity-50"
-          >
-            <div className="w-10 h-10 rounded-full bg-red-500" />
-          </button>
-        </div>
-
-        {/* Location label */}
-        <div className="w-full">
-          <p className="text-muted-foreground text-xs mb-1.5">Location name (optional)</p>
-          <input
-            placeholder="e.g. Bathroom sink, Kitchen counter"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            className="w-full bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
-          />
-        </div>
-
-        <p className="text-muted-foreground text-sm text-center px-2">
-          Every morning you'll need to take a photo of this spot to dismiss the alarm.
-        </p>
-      </div>
-
-      <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} />
-
-      <div className="grid shrink-0 grid-cols-2 gap-3 border-t border-border bg-background/95 px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3 backdrop-blur-sm">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            if (!photoDataUrl) { toast.error('Take a reference photo first'); return; }
-            setPreviewing(true);
-          }}
-          className="h-12 font-bold"
-        >
-          Preview
-        </Button>
-        <Button
-          type="button"
-          onClick={() => {
-            if (!photoDataUrl) { toast.error('Please take a reference photo first'); return; }
-            onSave({ ...value, photoDataUrl, photoLocation: location.trim() || 'Morning spot' });
-            toast.success('Photo mission configured ✓');
-            onClose();
-          }}
-          className="h-12 font-bold"
-        >
-          Save
-        </Button>
-      </div>
-      {previewing && photoDataUrl && (
-        <PreviewShell title="Photo challenge" onExit={() => setPreviewing(false)}>
-          <PhotoMission
-            registeredPlace={location.trim() || 'your morning spot'}
-            registeredPhotoUrl={photoDataUrl}
-            onComplete={() => {
-              toast.success('Preview complete — alarm would dismiss ✓');
-              setPreviewing(false);
-            }}
-          />
-        </PreviewShell>
-      )}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════
-   5. TYPING CONFIG
-   ══════════════════════════════════════════════════════════ */
-
-const PRESET_PHRASES = [
-  'Keep shining',
-  'I am ready for today',
-  'Rise and conquer',
-  'Every morning is a fresh start',
-  'Bismillah',
-  'Alhamdulillah for today',
-  'Make today count',
-  'I choose to be productive',
-  'بسم الله الرحمن الرحيم',
-  'আজকে আমি সেরাটা দেব',
-];
-
-function TypingConfigPage({ value, onSave, onClose }: { value: MissionConfig; onSave: (c: MissionConfig) => void; onClose: () => void }) {
-  const [phrase,          setPhrase]          = useState(value.typingPhrase ?? PRESET_PHRASES[0]);
-  const [difficulty,      setDifficulty]      = useState<MissionDifficulty>(value.difficulty ?? 'easy');
-  const [count,           setCount]           = useState(value.count ?? 1);
-  const [showPhraseList,  setShowPhraseList]  = useState(false);
-  const [customPhrase,    setCustomPhrase]    = useState('');
-  const [previewing,      setPreviewing]      = useState(false);
-  const [previewInput,    setPreviewInput]    = useState('');
-  const [typedCount,      setTypedCount]      = useState(0);
-  const [previewDone,     setPreviewDone]     = useState(false);
-  const previewTimers                          = useRef<number[]>([]);
-  const previewRef                             = useRef<HTMLInputElement>(null);
-
-  useEffect(() => () => { previewTimers.current.forEach(clearTimeout); previewTimers.current = []; }, []);
-
-  // Autofocus the input (and therefore the OS keyboard) only inside preview.
+function MissionSetup({ kind, value, onSave, onClose }: Props & { kind: MissionKind }) {
+  const [cfg, setCfg] = useState<MissionConfig>(() => ({ ...value, difficulty: value.difficulty ?? 'medium', count: Math.max(1, Math.min(kind === 'typing' ? 5 : 10, value.count || 1)), typingPhrase: value.typingPhrase || phrases[0] }));
+  const [preview, setPreview] = useState(false);
+  const [phraseList, setPhraseList] = useState(false);
+  const [customPhrase, setCustomPhrase] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [example, setExample] = useState(0);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const alive = useRef(true);
+  const patch = (partial: Partial<MissionConfig>) => setCfg(previous => ({ ...previous, ...partial }));
+  const exit = () => { if (preview) setPreview(false); else if (phraseList) setPhraseList(false); else onClose(); };
+  // Keep native back and browser Escape inside the current setup layer.
   useEffect(() => {
-    if (!previewing) return;
-    const id = window.setTimeout(() => previewRef.current?.focus(), 120);
-    return () => clearTimeout(id);
-  }, [previewing]);
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); exit(); } };
+    document.addEventListener('keydown', onKey, true);
+    let cancelled = false;
+    let remove: (() => void) | undefined;
+    if (isNative) void import('@capacitor/app').then(({ App }) => App.addListener('backButton', exit)).then(handle => { if (cancelled) void handle.remove(); else remove = () => { void handle.remove(); }; });
+    return () => { document.removeEventListener('keydown', onKey, true); cancelled = true; remove?.(); };
+  }, [preview, phraseList, onClose]);
 
-  const exitPreview = () => {
-    previewTimers.current.forEach(clearTimeout);
-    previewTimers.current = [];
-    setPreviewing(false);
-    setPreviewInput('');
-    setTypedCount(0);
-    setPreviewDone(false);
+  const totalShakes = cfg.count * (cfg.difficulty === 'easy' ? 5 : cfg.difficulty === 'hard' ? 15 : 10);
+  const totalSteps = requiredStepsFor(cfg.count, cfg.difficulty);
+  const ready = kind === 'qr' ? Boolean(cfg.targetBarcode?.trim()) : kind === 'photo' ? Boolean(cfg.photoDataUrl) : kind === 'typing' ? Boolean(cfg.typingPhrase?.trim()) : true;
+  const finished = () => { if (alive.current) { setPreview(false); toast.success('Preview complete'); } };
+  const registerCode = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { scanBarcode } = await import('@/lib/capacitor/barcodeScannerBridge');
+      const result = await scanBarcode();
+      if (!alive.current) return;
+      if (result.success && result.value) patch({ targetBarcode: result.value.trim() });
+      else if (result.error !== 'cancelled') toast.error('Could not scan the code. Try again.');
+    } catch { if (alive.current) toast.error('Could not open the scanner.'); }
+    finally { if (alive.current) setBusy(false); }
   };
-
-  const handlePreviewType = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setPreviewInput(v);
-    // 'hard' requires exact case; easier levels are case-insensitive.
-    const match = difficulty === 'hard' ? v === phrase : v.toLowerCase() === phrase.toLowerCase();
-    if (!match) return;
-    void successNotification();
-    const done = typedCount + 1;
-    setTypedCount(done);
-    setPreviewDone(true);
-    if (done >= count) {
-      toast.success('Preview complete — alarm would dismiss ✓');
-      previewTimers.current.push(window.setTimeout(exitPreview, 700));
-    } else {
-      toast.success(`Correct! ${done}/${count}`);
-      previewTimers.current.push(window.setTimeout(() => { setPreviewInput(''); setPreviewDone(false); }, 500));
-    }
+  const capturePhoto = async () => {
+    if (!isNative) { fileRef.current?.click(); return; }
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { Camera: NativeCamera, CameraResultType, CameraSource } = await import('@capacitor/camera');
+      const result = await NativeCamera.getPhoto({ quality: 70, resultType: CameraResultType.DataUrl, source: CameraSource.Camera, allowEditing: false, saveToGallery: false });
+      if (alive.current && result.dataUrl) patch({ photoDataUrl: result.dataUrl });
+    } catch (error) { if (alive.current && !/cancel/i.test(String(error))) toast.error('Camera unavailable. Check camera permission and try again.'); }
+    finally { if (alive.current) setBusy(false); }
   };
+  const headline = kind === 'math' ? `${cfg.count} ${cfg.count === 1 ? 'problem' : 'problems'}` : kind === 'shake' ? `${totalShakes} shakes` : kind === 'steps' ? `${totalSteps} steps` : kind === 'typing' ? cfg.typingPhrase || phrases[0] : kind === 'photo' ? 'Your morning spot' : cfg.targetBarcode ? 'Code registered' : 'Find your morning code';
+  const a = cfg.difficulty === 'easy' ? 4 + example % 5 : cfg.difficulty === 'hard' ? 7 + example % 4 : 24 + example % 20;
+  const b = cfg.difficulty === 'easy' ? 3 : cfg.difficulty === 'hard' ? 8 : 17;
+  const per = cfg.difficulty === 'easy' ? 120 : cfg.difficulty === 'hard' ? 30 : 60;
 
-  if (showPhraseList) {
-    return (
-      <div className="flex flex-col h-full bg-background">
-        <ConfigHeader title="Select phrase" onBack={() => setShowPhraseList(false)} onClose={onClose} />
-        <div className={cn(setupScrollerClass, 'flex flex-col gap-2 pt-3')}>
-          {/* Custom */}
-          <div className="mb-2">
-            <p className="text-muted-foreground text-xs mb-1.5">Custom phrase</p>
-            <div className="flex gap-2">
-              <input
-                placeholder="Type your own phrase..."
-                value={customPhrase}
-                onChange={(e) => setCustomPhrase(e.target.value)}
-                className="min-w-0 flex-1 bg-muted text-foreground rounded-xl px-4 py-3 text-sm outline-none border border-border focus:border-primary"
-              />
-              <button
-                onClick={() => {
-                  if (!customPhrase.trim()) { toast.error('Type a phrase first'); return; }
-                  void mediumImpact();
-                  setPhrase(customPhrase.trim());
-                  setShowPhraseList(false);
-                }}
-                className="px-4 py-3 bg-primary text-primary-foreground rounded-xl font-bold text-sm active:scale-95 transition-transform"
-              >
-                Use
-              </button>
-            </div>
+  return <div data-mission-setup={kind} className="fixed inset-0 z-[99999] flex h-[100dvh] min-w-0 flex-col overflow-hidden bg-background text-foreground">
+    <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 pb-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
+      <Button type="button" variant="ghost" size="icon" aria-label={preview ? 'Exit preview' : phraseList ? 'Back' : 'Close mission'} onClick={exit} className="h-11 w-11 shrink-0 rounded-full bg-muted">
+        {preview ? <X className="h-5 w-5" /> : <ArrowLeft className="h-5 w-5" />}
+      </Button>
+      <div className="min-w-0"><h2 className="text-lg font-bold">{phraseList ? 'Choose your phrase' : titles[kind]}</h2><p className="text-xs text-muted-foreground">{preview ? 'Preview' : 'Wake-up mission'}</p></div>
+      {!preview && !phraseList && <span className="ml-auto text-xs font-semibold text-primary">{kind === 'qr' || kind === 'photo' ? ready ? 'Registered' : 'Not registered' : `${cfg.count} ${cfg.count === 1 ? 'round' : 'rounds'}`}</span>}
+    </header>
+    {preview ? <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+      {kind === 'math' && <MathMission difficulty={cfg.difficulty} requiredSolves={cfg.count} perProblemSeconds={per} onComplete={finished} />}
+      {kind === 'shake' && <ShakeMission requiredShakes={totalShakes} onComplete={finished} />}
+      {kind === 'steps' && <StepMission requiredSteps={totalSteps} onComplete={finished} />}
+      {kind === 'qr' && <BarcodeMission targetBarcode={cfg.targetBarcode || ''} onComplete={finished} />}
+      {kind === 'photo' && <PhotoMission registeredPlace={cfg.photoLocation || 'your morning spot'} registeredPhotoUrl={cfg.photoDataUrl} onComplete={finished} />}
+      {kind === 'typing' && <TypingMission phrase={cfg.typingPhrase} requiredCount={cfg.count} difficulty={cfg.difficulty} onComplete={finished} />}
+    </div> : phraseList ? <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <label htmlFor="custom-mission-phrase" className="mb-2 block text-sm font-bold">Your own phrase</label>
+      <div className="mb-6 flex gap-2"><input id="custom-mission-phrase" maxLength={160} className={inputClass} value={customPhrase} onChange={e => setCustomPhrase(e.target.value)} placeholder="A fresh start begins today" /><Button disabled={!customPhrase.trim()} onClick={() => { patch({ typingPhrase: customPhrase.trim() }); setPhraseList(false); }}>Use</Button></div>
+      <div className="divide-y divide-border">{phrases.map(phrase => <Button key={phrase} variant="ghost" onClick={() => { patch({ typingPhrase: phrase }); setPhraseList(false); }} className={cn('h-auto min-h-14 w-full justify-between whitespace-normal rounded-none px-0 py-4 text-left', cfg.typingPhrase === phrase && 'text-primary')}><span className="min-w-0 break-words">{phrase}</span>{cfg.typingPhrase === phrase && <Check className="ml-3 h-5 w-5 shrink-0" />}</Button>)}</div>
+    </div> : <>
+      <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-5 pb-6">
+        {kind === 'photo' ? <section className="py-5">
+          <div className="relative mx-auto aspect-[4/3] w-full max-w-sm overflow-hidden rounded-lg border border-border bg-muted">
+            {cfg.photoDataUrl ? <img src={cfg.photoDataUrl} alt="Registered morning spot" className="h-full w-full object-cover" /> : <MissionStage kind="photo" headline="Your morning spot" />}
+            <Button aria-label="Capture reference photo" size="icon" disabled={busy} onClick={capturePhoto} className="absolute bottom-3 left-1/2 h-14 w-14 -translate-x-1/2 rounded-full border-4 border-background"><Camera className="h-6 w-6" /></Button>
           </div>
-          <p className="text-muted-foreground text-xs">Or choose a preset</p>
-          {PRESET_PHRASES.map((p) => (
-            <button
-              key={p}
-              onClick={() => { void lightImpact(); setPhrase(p); setShowPhraseList(false); }}
-              className={cn(
-                'w-full text-left px-4 py-4 rounded-xl text-base font-medium transition-colors active:scale-[0.99]',
-                phrase === p ? 'bg-primary/15 text-primary border border-primary/40' : 'bg-muted text-foreground hover:bg-muted/70',
-              )}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
+          <p className="mt-3 text-center text-sm font-semibold">{cfg.photoDataUrl ? 'Morning spot registered' : 'No reference photo yet'}</p>
+          <label htmlFor="mission-location" className="mb-2 mt-5 block text-sm font-bold">Location name</label><input id="mission-location" className={inputClass} value={cfg.photoLocation || ''} onChange={e => patch({ photoLocation: e.target.value })} placeholder="Bathroom sink" />
+        </section> : <MissionStage kind={kind} target={kind === 'steps' ? totalSteps : totalShakes} headline={headline} sub={kind === 'math' ? `${per} seconds per problem` : kind === 'typing' ? `${cfg.count} ${cfg.count === 1 ? 'repetition' : 'repetitions'}` : undefined}>
+          {kind === 'math' && <div className="w-full border-b border-border pb-5 text-center"><p className="text-xs font-bold uppercase text-muted-foreground">Morning warm-up</p><p className="my-4 text-4xl font-black tabular-nums">{a} {cfg.difficulty === 'hard' ? '×' : '+'} {b} <span className="text-primary">= ?</span></p><Button variant="ghost" size="sm" onClick={() => setExample(n => n + 1)}><RefreshCw className="mr-2 h-4 w-4" />New example</Button></div>}
+        </MissionStage>}
+        {(kind === 'math' || kind === 'shake' || kind === 'steps') && <DifficultyPicker value={cfg.difficulty} onChange={difficulty => patch({ difficulty })} labels={kind === 'math' ? ['Addition', 'Mixed sums', 'Multiply'] : kind === 'steps' ? ['10 / round', '20 / round', '40 / round'] : ['5 / round', '10 / round', '15 / round']} />}
+        {kind !== 'qr' && kind !== 'photo' && <CountPicker value={cfg.count} max={kind === 'typing' ? 5 : 10} onChange={count => patch({ count })} label={kind === 'math' ? 'Problems' : kind === 'typing' ? 'Repetitions' : 'Rounds'} />}
+        {kind === 'steps' && <div className="mt-3 flex items-center justify-between border-t border-border py-4"><span className="text-sm text-muted-foreground">Walking target</span><span className="text-lg font-black text-primary">{totalSteps} steps</span></div>}
+        {kind === 'shake' && <div className="mt-3 flex items-center justify-between border-t border-border py-4"><span className="text-sm text-muted-foreground">Movement target</span><span className="text-lg font-black text-primary">{totalShakes} shakes</span></div>}
+        {kind === 'typing' && <>
+          <Button variant="ghost" onClick={() => setPhraseList(true)} className="my-3 h-14 w-full justify-between rounded-lg bg-muted px-4"><span>Change phrase</span><ChevronRight className="h-5 w-5" /></Button>
+          <label className="flex items-center justify-between gap-4 border-t border-border py-4"><span className="text-sm font-semibold">Match capital letters</span><Switch checked={cfg.difficulty === 'hard'} onCheckedChange={checked => patch({ difficulty: checked ? 'hard' : 'easy' })} aria-label="Match capital letters" /></label>
+        </>}
+        {kind === 'qr' && <div className="border-t border-border py-4">
+          <label htmlFor="mission-code" className="mb-2 block text-sm font-bold">{isNative ? 'Registered code' : 'Barcode value'}</label>
+          <input id="mission-code" className={cn(inputClass, 'font-mono')} value={cfg.targetBarcode || ''} readOnly={isNative} onChange={e => patch({ targetBarcode: e.target.value })} placeholder="Enter the code on your morning item" />
+          {isNative && <Button variant="outline" disabled={busy} onClick={registerCode} className="mt-3 h-12 w-full">{busy ? 'Opening scanner…' : cfg.targetBarcode ? 'Scan another code' : 'Scan a code'}</Button>}
+        </div>}
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e => {
+          const file = e.target.files?.[0]; if (!file) return;
+          if (!file.type.startsWith('image/')) { toast.error('Choose an image file.'); return; }
+          const reader = new FileReader(); reader.onerror = () => toast.error('Could not read this photo.');
+          reader.onload = () => { if (alive.current && typeof reader.result === 'string') patch({ photoDataUrl: reader.result }); }; reader.readAsDataURL(file); e.target.value = '';
+        }} />
+      </main>
+      <footer className="grid shrink-0 grid-cols-2 gap-3 border-t border-border bg-background px-4 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-3">
+        <Button variant="outline" disabled={!ready || busy} onClick={() => setPreview(true)} className="h-12"><Play className="mr-2 h-4 w-4" />Preview</Button>
+        <Button disabled={!ready || busy} onClick={() => { onSave({ ...cfg, targetBarcode: cfg.targetBarcode?.trim(), typingPhrase: cfg.typingPhrase?.trim() }); onClose(); }} className="h-12"><Save className="mr-2 h-4 w-4" />Save</Button>
+      </footer>
+    </>}
+  </div>;
+}
 
-  return (
-    <div className="relative flex flex-col h-full bg-background">
-      <ConfigHeader title="Typing" onClose={onClose} />
-
-      {/* SETUP — read-only example, no text field so the keyboard stays closed */}
-      <div className={cn(setupScrollerClass, 'flex flex-col gap-4 pt-3')}>
-        <MissionStage kind="typing" headline={phrase} sub={`Type it ${count} ${count === 1 ? 'time' : 'times'} to stop the alarm`} />
-
-        <CountPicker value={count} onChange={setCount} max={5} label="times" />
-
-        <button
-          onClick={() => { void lightImpact(); setShowPhraseList(true); }}
-          className="w-full flex items-center justify-between bg-muted rounded-xl px-4 py-4 active:scale-[0.99] transition-transform"
-        >
-          <span className="text-foreground font-medium">Select phrase</span>
-          <div className="flex items-center gap-2">
-            <span className="text-primary text-sm">{PRESET_PHRASES.length} phrases</span>
-            <ChevronRight className="h-4 w-4 text-muted-foreground" />
-          </div>
-        </button>
-      </div>
-
-      <ActionButtons
-        onPreview={() => { setTypedCount(0); setPreviewInput(''); setPreviewDone(false); setPreviewing(true); }}
-        onComplete={() => {
-          onSave({ ...value, typingPhrase: phrase, count, difficulty });
-          toast.success('Typing mission configured ✓');
-          onClose();
-        }}
-      />
-
-      {/* PREVIEW — full-screen challenge, keyboard opens here only */}
-      {previewing && (
-        <PreviewShell title="Typing challenge" onExit={exitPreview}>
-          <TypingMission
-            phrase={phrase}
-            difficulty={difficulty}
-            requiredCount={count}
-            onComplete={() => { toast.success('Preview complete — alarm would dismiss ✓'); exitPreview(); }}
-          />
-        </PreviewShell>
-      )}
-    </div>
-
-  );
+function DifficultyPicker({ value, onChange, labels }: { value: MissionDifficulty; onChange: (value: MissionDifficulty) => void; labels: string[] }) {
+  return <section className="border-t border-border py-4"><h3 className="mb-3 text-sm font-bold">Difficulty</h3><div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">{(['easy', 'medium', 'hard'] as const).map((level, i) => <Button key={level} role="radio" aria-checked={level === value} variant={level === value ? 'default' : 'outline'} onClick={() => onChange(level)} className="h-auto min-w-0 flex-col gap-1 whitespace-normal rounded-lg px-1 py-3"><span className="text-sm capitalize">{level}</span><span className="text-[10px] opacity-80">{labels[i]}</span></Button>)}</div></section>;
+}
+function CountPicker({ value, max, onChange, label }: { value: number; max: number; onChange: (value: number) => void; label: string }) {
+  return <section className="border-t border-border py-4"><div className="flex items-center justify-between gap-3"><h3 className="text-sm font-bold">{label}</h3><div className="flex items-center gap-2"><Button variant="outline" size="icon" aria-label="Fewer rounds" disabled={value <= 1} onClick={() => onChange(value - 1)} className="h-11 w-11 rounded-full"><Minus className="h-4 w-4" /></Button><output className="w-8 text-center text-2xl font-black tabular-nums text-primary">{value}</output><Button variant="outline" size="icon" aria-label="More rounds" disabled={value >= max} onClick={() => onChange(value + 1)} className="h-11 w-11 rounded-full"><Plus className="h-4 w-4" /></Button></div></div><div aria-hidden="true" className="mt-4 flex h-1.5 gap-1">{Array.from({ length: max }, (_, i) => <span key={i} className={cn('min-w-0 flex-1 rounded-full', i < value ? 'bg-primary' : 'bg-muted')} />)}</div></section>;
 }
